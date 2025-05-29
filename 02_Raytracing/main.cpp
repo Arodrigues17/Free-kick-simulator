@@ -10,6 +10,8 @@
 #include <immintrin.h>
 #include <fstream>
 #include <algorithm>
+#include "../01_KickSimulator/Vector.h"
+#include "../01_KickSimulator/generate_free_kick_waypoints.h"
 
 using namespace std;
 
@@ -104,87 +106,6 @@ public:
         return os;
     }
 };
-
-class Vector {
-public:
-    double x, y, z;
-
-    Vector() : x(0), y(0), z(0) {}
-    Vector(double x, double y, double z) : x(x), y(y), z(z) {}
-
-    // Addition operator (const-correct)
-    Vector operator+(const Vector& v) const {
-        return Vector(x + v.x, y + v.y, z + v.z);
-    }
-
-    // Subtraction operator (const-correct)
-    Vector operator-(const Vector& v) const {
-        return Vector(x - v.x, y - v.y, z - v.z);
-    }
-
-    // Scalar multiplication (Vector * double)
-    Vector operator*(double s) const {
-        return Vector(x * s, y * s, z * s);
-    }
-
-    // Scalar multiplication (double * Vector) - for commutativity
-    friend Vector operator*(double s, const Vector& v) {
-        return Vector(v.x * s, v.y * s, v.z * s);
-    }
-
-    // Unary negation
-    Vector operator-() const {
-        return Vector(-x, -y, -z);
-    }
-
-    friend ostream& operator<<(ostream& os, const Vector& v) {
-        os << "x: " << v.x << ", y: " << v.y << ", z: " << v.z;
-        return os;
-    }
-
-    // Dot product
-    double dot(const Vector& v) const {
-        return x * v.x + y * v.y + z * v.z;
-    }
-
-    Vector cross(const Vector& v) const {
-        return Vector(
-            y * v.z - z * v.y,
-            z * v.x - x * v.z,
-            x * v.y - y * v.x
-        );
-    }
-
-    // Normalize function
-    void normalize() {
-    #ifdef USE_AVX  // Only use AVX if this flag is defined
-        __m256d vec = _mm256_set_pd(0.0, x, y, z);  // AVX stores (z, y, x, 0)
-        __m256d squared = _mm256_mul_pd(vec, vec);
-        __m256d sum = _mm256_hadd_pd(squared, squared); // Horizontal add
-        double len = sqrt(((double*)&sum)[0] + ((double*)&sum)[2]);  // Extract and compute length
-    
-        if (len > 0) {
-            __m256d invLen = _mm256_set1_pd(1.0 / len);
-            vec = _mm256_mul_pd(vec, invLen);
-            x = ((double*)&vec)[2];  // Extract values back
-            y = ((double*)&vec)[1];
-            z = ((double*)&vec)[0];
-        }
-    #else
-        double len = sqrt(x * x + y * y + z * z);
-        if (len > 0) {
-            x /= len;
-            y /= len;
-            z /= len;
-        }
-    #endif
-    }
-
-    double norm() const {
-        double length = std::sqrt(x * x + y * y + z * z);
-        return length;
-    }
-};    
 
 class LightSource {
 public:
@@ -983,15 +904,16 @@ int main(int argc, char* argv[]) {
     Glassy glassy(RGB(255, 255, 255));
     Metallic redMetal(RGB(255, 0, 0));
     Metallic blueMetal(RGB(0, 0, 255));
-    //Metallic greenMetal(RGB(0, 255, 0));
+    Metallic greenMetal(RGB(0, 255, 0));
     Metallic yellowMetal(RGB(255, 255, 0));
-    CheckerboardMaterial checkerboard(RGB(255, 255, 255), RGB(0, 0, 0), radius);
+    Metallic whiteMetal(RGB(255, 255, 255));
+    CheckerboardMaterial checkerboard(RGB(34, 139, 34), RGB(0, 100, 0), radius); // Grassy green
 
     // Shapes
     std::vector<Sphere*> spheres;
-    std::vector<Shape*> objects = loadOBJ("teapot.txt", &glassy);
+    std::vector<Shape*> objects; // Only use spheres and/or plane
 
-    cout << "Loaded teapot: " << objects.size() << " triangles have been loaded"  << endl;
+    // cout << "Loaded teapot: " << objects.size() << " triangles have been loaded"  << endl;
 
     {
         // Rotate left a bit
@@ -1040,12 +962,10 @@ int main(int argc, char* argv[]) {
     double orbitRadius = radius + smallSphereRadius + 0.5;  // Distance from the big sphere
     Sphere* redSphere = new Sphere(glassCenter + Vector(orbitRadius, 0, 0), smallSphereRadius, &redMetal);
     Sphere* blueSphere = new Sphere(glassCenter + Vector(-orbitRadius, 0, 0), smallSphereRadius, &blueMetal);
-    //Sphere* greenSphere = new Sphere(glassCenter + Vector(0, 0, orbitRadius), smallSphereRadius, &greenMetal);
     Sphere* yellowSphere = new Sphere(glassCenter + Vector(0, 0, -orbitRadius), smallSphereRadius, &yellowMetal);
 
     spheres.push_back(redSphere);
     spheres.push_back(blueSphere);
-    //spheres.push_back(greenSphere);
     spheres.push_back(yellowSphere);
 
     for (Sphere* sphere : spheres) {
@@ -1053,7 +973,7 @@ int main(int argc, char* argv[]) {
     }
 
     // **Ground Plane**
-    Plane floor(Vector(0, 0, -1), Vector(0, 0, 1), &checkerboard);
+    Plane floor(Vector(0, 0, -1), Vector(0, 0, 1), &greenMetal);
     objects.push_back(&floor);
 
     // **Light source**
@@ -1070,7 +990,6 @@ int main(int argc, char* argv[]) {
         // **Move small spheres only in the X-Z plane, keeping Y fixed**
         redSphere->center = glassCenter + Vector(orbitRadius * cos(angle), orbitRadius * sin(angle), 0);
         blueSphere->center = glassCenter + Vector(orbitRadius * cos(angle + M_PI_2), orbitRadius * sin(angle + M_PI_2), 0); 
-        //greenSphere->center = glassCenter + Vector(orbitRadius * cos(angle + M_PI), orbitRadius * sin(angle + M_PI), 0);  
         yellowSphere->center = glassCenter + Vector(orbitRadius * cos(angle + 3 * M_PI_2), orbitRadius * sin(angle + 3 * M_PI_2), 0);  
 
         // **Render frame**
@@ -1089,5 +1008,26 @@ int main(int argc, char* argv[]) {
         delete sphere;
     }
 
+    // **Single moving sphere setup with waypoints**
+    std::vector<Vector> waypoints = generate_free_kick_waypoints(30);
+    objects.clear();
+    // Use the already-declared whiteMetal
+    double sphereRadius = 1.0;
+    Sphere* movingSphere = new Sphere(Vector(0, 0, 0), sphereRadius, &whiteMetal);
+    objects.push_back(movingSphere);
+
+    // Reuse already-declared light and ambientLight
+    numFrames = waypoints.size();
+    for (int i = 0; i < numFrames; i++) {
+        movingSphere->center = waypoints[i];
+        Screen screen(Vector(1.0, 0.0, 0.0), 500, 500);
+        processScreen(screen, origin, objects, light, ambientLight, AA_REGULAR_4, reflMethod);
+        std::ostringstream filenameStream;
+        filenameStream << "output/frame_" << std::setw(4) << std::setfill('0') << i << ".jpg";
+        std::string filename = filenameStream.str();
+        screen.writeToJPG(filename);
+    }
+
+    delete movingSphere;
     return 0;
 }
