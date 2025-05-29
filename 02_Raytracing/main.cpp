@@ -604,8 +604,6 @@ RGB traceRay(Ray& ray, Screen& screen, vector<Shape*>& objects, int depth, Light
     Vector hitPoint;
 
     for (Shape* obj : objects) {
-        double dot_ray_face_normal = ray.direction.dot(obj->getSurfaceNormal(ray.direction));
-        if (!dynamic_cast<Glassy*>(obj->getMaterial()) && dot_ray_face_normal >= 0) continue;
         double t = obj->solveRoot(ray);
         if (t > 0 && t < minT) {
             minT = t;
@@ -886,6 +884,29 @@ vector<Shape*> loadOBJ(const string& filename, Material* material) {
     return triangles;
 }
 
+void renderMovingSphere(int count, Vector camPos, Vector screenNormal, vector<Shape*>& objects, Material* sphereMat, LightSource& light, RGB ambientLight, ANTI_ALIASING aa, ReflectionMethod reflMethod, double kick_start_z) {
+    auto waypoints = generate_free_kick_waypoints(count, kick_start_z); // Pass kick_start_z
+    Sphere* movingSphere = new Sphere(Vector(0,0,0), 0.11, sphereMat); // Changed radius from 1.0 to 0.11
+    objects.push_back(movingSphere);
+    int numFrames = waypoints.size();
+    for (int i = 0; i < numFrames; ++i) {
+        // Apply coordinate mapping: waypoint (depth, height, width) to world (depth, width, height)
+        movingSphere->center.x = waypoints[i].x; // X (depth) maps directly
+        movingSphere->center.y = waypoints[i].z; // Y (world width) gets Z from waypoint (width)
+        movingSphere->center.z = waypoints[i].y; // Z (world height) gets Y from waypoint (height)
+        
+        Screen screen(screenNormal, 2560, 1440);
+        screen.pov = 0.9; // Decrease pov for a wider field of view
+        processScreen(screen, camPos, objects, light, ambientLight, aa, reflMethod);
+        std::ostringstream filenameStream;
+        filenameStream << "output/frame_" << std::setw(4) << std::setfill('0') << i << ".jpg";
+        screen.writeToJPG(filenameStream.str());
+    }
+    // Remove the movingSphere from the objects vector before deleting it
+    objects.erase(std::remove(objects.begin(), objects.end(), movingSphere), objects.end());
+    delete movingSphere;
+}
+
 int main(int argc, char* argv[]) {
     if (argc < 3) {
         cerr << "Not enough parameters." << endl;
@@ -910,7 +931,7 @@ int main(int argc, char* argv[]) {
     CheckerboardMaterial checkerboard(RGB(34, 139, 34), RGB(0, 100, 0), radius); // Grassy green
 
     // Shapes
-    std::vector<Sphere*> spheres;
+    // std::vector<Sphere*> spheres; // Commented out as it's related to orbiting spheres
     std::vector<Shape*> objects; // Only use spheres and/or plane
 
     // cout << "Loaded teapot: " << objects.size() << " triangles have been loaded"  << endl;
@@ -958,6 +979,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    /*
     // **Small spheres orbiting in a perfect horizontal circle**
     double orbitRadius = radius + smallSphereRadius + 0.5;  // Distance from the big sphere
     Sphere* redSphere = new Sphere(glassCenter + Vector(orbitRadius, 0, 0), smallSphereRadius, &redMetal);
@@ -971,15 +993,17 @@ int main(int argc, char* argv[]) {
     for (Sphere* sphere : spheres) {
         objects.push_back(sphere);
     }
+    */
 
     // **Ground Plane**
-    Plane floor(Vector(0, 0, -1), Vector(0, 0, 1), &greenMetal);
+    Plane floor(Vector(0, 0, -1), Vector(0, 0, 1), &checkerboard);
     objects.push_back(&floor);
 
     // **Light source**
     LightSource light(Vector(5, 5, 0), RGB(255, 255, 255));
-    RGB ambientLight(255, 255, 225);
+    RGB ambientLight(255, 255, 255); // Increased from (255, 255, 225)
 
+    /*
     // **Horizontal Orbital Motion Setup**
     int numFrames = 1;  // Number of frames for one full orbit
     double angleStep = 2 * M_PI / numFrames;  // Angle increment per frame
@@ -994,6 +1018,7 @@ int main(int argc, char* argv[]) {
 
         // **Render frame**
         Screen screen(Vector(1.0, 0.0, 0.0), 500, 500);
+        screen.pov = 0.9; // Decrease pov for a wider field of view
         processScreen(screen, origin, objects, light, ambientLight, AA_REGULAR_4, reflMethod);
 
         // **Save frame**
@@ -1002,32 +1027,57 @@ int main(int argc, char* argv[]) {
         std::string filename = filenameStream.str();
         screen.writeToJPG(filename);
     }
+    */
 
     // **Cleanup dynamically allocated objects**
-    for (Sphere* sphere : spheres) {
-        delete sphere;
+    /*
+    for (Sphere* sphere_to_delete : spheres) { // `spheres` is the list of small orbiting ones
+        delete sphere_to_delete;
     }
+    spheres.clear(); // Clear the list of pointers
+    */
+    objects.clear(); // Clear all objects from the previous scene (dangling small spheres and the floor)
+    objects.push_back(&floor); // Re-add the floor for the renderMovingSphere calls. 'floor' is still in scope.
 
-    // **Single moving sphere setup with waypoints**
-    std::vector<Vector> waypoints = generate_free_kick_waypoints(30);
-    objects.clear();
-    // Use the already-declared whiteMetal
-    double sphereRadius = 1.0;
-    Sphere* movingSphere = new Sphere(Vector(0, 0, 0), sphereRadius, &whiteMetal);
-    objects.push_back(movingSphere);
+    // Randomize kick_start_z for the free kick
+    std::random_device rd_kick_z;
+    std::mt19937 gen_kick_z(rd_kick_z());
+    // Assuming goal width is 7.32, let's say kick can be from -3.0 to 3.0 for some variation
+    std::uniform_real_distribution<> kick_z_dist(-10.0, 10.0);
+    double random_kick_start_z = kick_z_dist(gen_kick_z);
 
-    // Reuse already-declared light and ambientLight
-    numFrames = waypoints.size();
-    for (int i = 0; i < numFrames; i++) {
-        movingSphere->center = waypoints[i];
-        Screen screen(Vector(1.0, 0.0, 0.0), 500, 500);
-        processScreen(screen, origin, objects, light, ambientLight, AA_REGULAR_4, reflMethod);
-        std::ostringstream filenameStream;
-        filenameStream << "output/frame_" << std::setw(4) << std::setfill('0') << i << ".jpg";
-        std::string filename = filenameStream.str();
-        screen.writeToJPG(filename);
-    }
+    // Define and add the defensive wall
+    // Wall position: 9.15m from kick (KICK_X = 25.0) -> Wall_X = 25.0 - 9.15 = 15.85
+    // Wall Y-center is now halfway between random_kick_start_z and goal center (0.0)
+    const double wall_X = 15.85;
+    const double wall_Y_center = random_kick_start_z / 2.0; // Halfway between kick_start_z and 0
+    const double wall_width = 2.0;
+    const double wall_height = 1.8;
+    const double floor_Z = -1.0;
 
-    delete movingSphere;
+    Vector v_wall_bottom_left(wall_X, wall_Y_center - wall_width / 2.0, floor_Z);
+    Vector v_wall_bottom_right(wall_X, wall_Y_center + wall_width / 2.0, floor_Z);
+    Vector v_wall_top_right(wall_X, wall_Y_center + wall_width / 2.0, floor_Z + wall_height);
+    Vector v_wall_top_left(wall_X, wall_Y_center - wall_width / 2.0, floor_Z + wall_height);
+
+    Triangle* wall_tri1 = new Triangle(v_wall_bottom_left, v_wall_bottom_right, v_wall_top_right, &whiteMetal);
+    Triangle* wall_tri2 = new Triangle(v_wall_bottom_left, v_wall_top_right, v_wall_top_left, &whiteMetal);
+    
+    objects.push_back(wall_tri1);
+    objects.push_back(wall_tri2);
+
+    // now use renderMovingSphere for free kick and goalkeeper views
+    // Pass random_kick_start_z to the first call (free kick view)
+    // renderMovingSphere(100, origin, Vector(1.0, 0.0, 0.0), objects, &whiteMetal, light, ambientLight, AA_REGULAR_4, reflMethod, random_kick_start_z);
+
+    Vector goalkeeper_pos(0.0, 0.0, 1.8);
+    Vector screen_normal(1.0, 0.0, 0.0);
+    // For goalkeeper view, we might want a consistent kick Z or another random one.
+    // Using the same random_kick_start_z for consistency in this example.
+    renderMovingSphere(500, goalkeeper_pos, screen_normal, objects, &whiteMetal, light, ambientLight, AA_REGULAR_4, reflMethod, random_kick_start_z);
+
+    delete wall_tri1;
+    delete wall_tri2;
+
     return 0;
 }
