@@ -8,10 +8,19 @@ DEPTH ?= 5
 run_simulation: all
 	@mkdir -p output
 	./main $(METHOD) $(DEPTH)
-	ffmpeg -framerate 30 -pattern_type glob -i 'output/frame_*.jpg' -c:v libx264 -pix_fmt yuv420p -q:v 2 free_kick_video.mp4
+	ffmpeg -y -framerate 30 -pattern_type glob -i 'output/frame_*.jpg' -c:v libx264 -pix_fmt yuv420p -q:v 2 free_kick_video.mp4
 
 generate_video:
 	ffmpeg -framerate 30 -pattern_type glob -i 'output/frame_*.jpg' -c:v libx264 -pix_fmt yuv420p -q:v 2 free_kick_animation.mp4
+
+generate_videos_per_folder:
+	@echo "Generating videos for each wavepoint folder..."
+	@for dir in $(shell find ./output/ -maxdepth 1 -type d -name 'wavepoints_*'); do \\
+		echo "Processing $$dir"; \\
+		video_name=$$(basename $$dir); \\
+		ffmpeg -y -framerate 30 -pattern_type glob -i "$$dir/frame_*.jpg" -c:v libx264 -pix_fmt yuv420p -q:v 2 "$$dir/$${video_name}.mp4"; \\
+	done
+	@echo "Finished generating videos."
 
 free_kick_workflow: all
 	$(MAKE) run_simulation METHOD=$(METHOD) DEPTH=$(DEPTH)

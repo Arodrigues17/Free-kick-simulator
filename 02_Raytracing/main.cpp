@@ -13,6 +13,7 @@
 #include <string>  // Required for std::string, std::stod
 #include <algorithm>
 #include <limits> // Required for std::numeric_limits
+#include <filesystem> // Added for directory operations
 #include "../01_KickSimulator/Vector.h" // Defines Vec3
 // #include "../01_KickSimulator/generate_free_kick_waypoints.h" // Removed
 
@@ -612,7 +613,7 @@ public:
     
     SoccerBallMaterial(RGB _pentagonColor, RGB _hexagonColor) 
         : pentagonColor(_pentagonColor), hexagonColor(_hexagonColor),
-          mA(0.1), mD(0.8), mS(0.1), mSp(10.0), eta(1.0) {}  // Reduced ambient and specular
+          mA(0.15), mD(0.85), mS(0.6), mSp(25.0), eta(1.0) {}  // Enhanced material properties
 
     RGB getObjectColor() const override { return RGB(255, 255, 255); } // Will be overridden
     double getAmbientCoefficient() const override { return mA; }
@@ -621,46 +622,64 @@ public:
     double getShininessCoefficient() const override { return mSp; }
     double getRefractionIndex() const override { return eta; }
 
-    // Simplified soccer ball pattern using spherical coordinates
-    RGB getColorAtPoint(const Vec3& point, const Vec3& center) const {
-        // Convert point to sphere surface coordinates
-        Vec3 surfacePoint = (point - center);
-        surfacePoint.normalize();
-        
+    // Improved soccer ball pattern that creates a more realistic appearance
+    RGB getColorAtPoint(const Vec3& point, const Vec3& sphereCenter) const {
+        Vec3 localPoint = point - sphereCenter;
+        localPoint.normalize(); // Point on unit sphere centered at origin
+
         // Convert to spherical coordinates
-        double theta = atan2(surfacePoint.y, surfacePoint.x); // Azimuth angle
-        double phi = acos(surfacePoint.z);                    // Polar angle
+        double theta = atan2(localPoint.y, localPoint.x); // Azimuthal angle [-π, π]
+        double phi = acos(localPoint.z);                   // Polar angle [0, π]
         
         // Normalize angles to [0, 1] range
-        double u = (theta + M_PI) / (2.0 * M_PI);  // 0 to 1
-        double v = phi / M_PI;                      // 0 to 1
+        double u = (theta + M_PI) / (2.0 * M_PI);  // [0, 1]
+        double v = phi / M_PI;                      // [0, 1]
         
-        // Create a simplified soccer ball pattern using trigonometric functions
-        // This creates a pattern that resembles pentagon and hexagon patches
+        // Create multiple pattern layers for more realistic soccer ball appearance
         
-        // Create pentagon-like regions (5-fold symmetry)
-        double pentagon_pattern = sin(5.0 * theta) * sin(3.0 * phi);
+        // Primary pentagon pattern - creates large black patches
+        double pentagon_scale = 4.0;
+        double pentagon_u = fmod(u * pentagon_scale, 1.0);
+        double pentagon_v = fmod(v * pentagon_scale, 1.0);
         
-        // Create hexagon-like regions (6-fold symmetry)
-        double hexagon_pattern = sin(6.0 * theta + M_PI/6) * sin(4.0 * phi + M_PI/4);
+        // Create pentagon-like shapes using smooth functions
+        double pentagon_pattern = 0.5 + 0.5 * cos(pentagon_u * 2.0 * M_PI * 2.0) * cos(pentagon_v * 2.0 * M_PI * 2.0);
+        pentagon_pattern = pow(pentagon_pattern, 2.0); // Make edges sharper
         
-        // Combine patterns to create soccer ball-like appearance
-        double pattern_value = pentagon_pattern * hexagon_pattern;
+        // Secondary hexagon pattern - creates smaller white patches
+        double hexagon_scale = 6.0;
+        double hexagon_u = fmod(u * hexagon_scale + 0.5, 1.0);
+        double hexagon_v = fmod(v * hexagon_scale + 0.25, 1.0);
         
-        // Add some randomness for more realistic appearance
-        double noise = sin(20.0 * theta) * sin(20.0 * phi) * 0.1;
-        pattern_value += noise;
+        double hexagon_pattern = 0.5 + 0.5 * cos(hexagon_u * 2.0 * M_PI * 3.0) * cos(hexagon_v * 2.0 * M_PI * 3.0);
+        hexagon_pattern = pow(hexagon_pattern, 1.5);
         
-        // Threshold to create distinct regions
-        if (pattern_value > 0.2) {
-            return pentagonColor;  // Black regions
+        // Combine patterns with some randomness for more organic look
+        double noise_scale = 20.0;
+        double noise = 0.5 + 0.5 * sin(u * noise_scale) * cos(v * noise_scale * 1.3);
+        
+        // Create curved seam lines
+        double seam_u = fmod(u * 12.0, 1.0);
+        double seam_v = fmod(v * 8.0, 1.0);
+        double seam_pattern = 1.0 - exp(-50.0 * min(seam_u, 1.0 - seam_u) * min(seam_v, 1.0 - seam_v));
+        
+        // Combine all patterns
+        double final_pattern = pentagon_pattern * 0.6 + hexagon_pattern * 0.3 + noise * 0.1;
+        final_pattern *= seam_pattern; // Apply seam masking
+        
+        // Add some variation based on latitude to break symmetry
+        double latitude_variation = 0.5 + 0.3 * sin(phi * 3.0) * cos(theta * 2.0);
+        final_pattern *= latitude_variation;
+        
+        // Threshold to determine black vs white
+        if (final_pattern > 0.45) {
+            return hexagonColor; // White patches
         } else {
-            return hexagonColor;   // White regions
+            return pentagonColor; // Black patches
         }
     }
 };
 
-// Soccer ball sphere class that handles the soccer ball pattern
 class SoccerBallSphere : public Sphere {
 public:
     SoccerBallSphere(Vec3 _center, double _R, SoccerBallMaterial* _material) 
@@ -673,6 +692,7 @@ public:
         
         if (soccerMat) {
             Vec3 rotatedPoint = point;
+            // Apply rotation if there's spin
             if (currentRotationAngle > EPS && currentRotationAxis.norm() > EPS) {
                 Vec3 localPoint = point - center;
                 localPoint = rotate(localPoint, currentRotationAxis, -currentRotationAngle);
@@ -719,12 +739,12 @@ RGB traceRay(Ray& ray, Screen& screen, vector<Shape*>& objects, int depth, Light
         }
         
         if (dynamic_cast<SoccerBallMaterial*>(hitMaterial)) {
-            // Handle soccer ball material
+            // Handle soccer ball material with improved lighting
             SoccerBallSphere* soccerSphere = dynamic_cast<SoccerBallSphere*>(closestObject);
             if (soccerSphere) {
                 RGB patternColor = soccerSphere->getColorAtPoint(hitPoint);
                 
-                // Apply Phong lighting to the pattern color
+                // Apply enhanced Phong lighting to the pattern color
                 Vec3 normal = closestObject->getSurfaceNormal(hitPoint);
                 normal.normalize();
                 
@@ -740,21 +760,40 @@ RGB traceRay(Ray& ray, Screen& screen, vector<Shape*>& objects, int depth, Light
                 double mS = hitMaterial->getSpecularCoefficient();
                 double mSp = hitMaterial->getShininessCoefficient();
                 
+                // Enhanced lighting calculation
                 RGB ambient = patternColor * ambientLight * mA;
                 RGB diffuse = patternColor * light.intensity * mD * std::max(L.dot(normal), 0.0);
-                RGB specular = RGB(255, 255, 255) * light.intensity * mS * pow(std::max(V.dot(R), 0.0), mSp);
                 
-                RGB finalColor = ambient + diffuse + specular;
+                // Add subtle subsurface scattering effect for more realistic soccer ball
+                double subsurface = std::max(0.0, -L.dot(normal)) * 0.3;
+                RGB subsurfaceColor = patternColor * light.intensity * subsurface;
                 
-                // Shadow check
+                // Enhanced specular with color-dependent highlights
+                RGB specularColor = (patternColor * 0.3 + RGB(255, 255, 255) * 0.7); // Blend with white for realistic highlights
+                RGB specular = specularColor * light.intensity * mS * pow(std::max(V.dot(R), 0.0), mSp);
+                
+                RGB finalColor = ambient + diffuse + subsurfaceColor + specular;
+                
+                // Shadow check with soft shadow effect
                 Vec3 shadowOrigin = hitPoint + normal * EPS;
                 Vec3 shadowDir = (light.position - shadowOrigin);
+                double lightDistance = shadowDir.norm();
                 shadowDir.normalize();
                 Ray shadowRay(shadowOrigin, shadowDir);
                 
-                double t_shadow = closestObject->solveRoot(shadowRay);
-                if (t_shadow > EPS && t_shadow < (light.position - shadowOrigin).norm()) {
-                    finalColor = ambient; // Only ambient if in shadow
+                bool inShadow = false;
+                for (Shape* obj : objects) {
+                    if (obj != closestObject) {
+                        double t_shadow = obj->solveRoot(shadowRay);
+                        if (t_shadow > EPS && t_shadow < lightDistance - EPS) {
+                            inShadow = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if (inShadow) {
+                    finalColor = ambient + subsurfaceColor * 0.5; // Softer shadows
                 }
                 
                 finalColor.clamp();
@@ -794,7 +833,7 @@ RGB traceRay(Ray& ray, Screen& screen, vector<Shape*>& objects, int depth, Light
     RGB phongColor = ambient + diffuse + specular;
 
     // **Shadow Check**
-    Vec3 shadowOrigin = hitPoint + normal * EPS; // Prevent self-intersection
+    Vec3 shadowOrigin = hitPoint + normal * EPS; // Renamed for clarity
     Vec3 shadowDir = (light.position - shadowOrigin);
     shadowDir.normalize();
     Ray shadowRay(shadowOrigin, shadowDir);
@@ -1074,7 +1113,73 @@ void loadWaypointsAndObjectsFromCSV(
                 goalPosition_simCoords.x = csv_x;
                 goalPosition_simCoords.y = csv_y;
                 goalPosition_simCoords.z = csv_z;
-            } else
+            } else if (object_type == "wall") {
+                // Wall properties from CSV (simulation coordinates)
+                // segments[0-2] are csv_x, csv_y, csv_z (center_sim)
+                // segments[4] is size_x (width_sim)
+                // segments[5] is size_y (height_sim)
+                // segments[6-8] are orientation_x,y,z (normal_sim)
+
+                double width_sim = std::stod(segments[4]);
+                double height_sim = std::stod(segments[5]);
+                Vec3 normal_sim(std::stod(segments[6]), std::stod(segments[7]), std::stod(segments[8]));
+
+                // Convert center and normal to world coordinates
+                Vec3 center_world;
+                center_world.x = csv_x;       // depth
+                center_world.y = csv_z;       // width
+                center_world.z = csv_y;       // height
+
+                Vec3 normal_world;
+                normal_world.x = normal_sim.x; // depth component
+                normal_world.y = normal_sim.z; // width component
+                normal_world.z = normal_sim.y; // height component
+                normal_world.normalize();
+
+                // Dimensions in world (assuming direct mapping for width/height of the panel)
+                double wall_width_world = width_sim;
+                double wall_height_world = height_sim;
+
+                // Create orthonormal basis for the wall plane
+                Vec3 u_vec; // "right" vector on the wall plane
+                Vec3 v_vec; // "up" vector on the wall plane
+                Vec3 w_vec = normal_world; // normal vector
+
+                // Choose a vector not parallel to w_vec to start cross products
+                Vec3 temp_aux_vec = (std::abs(w_vec.x) > 0.1 ? Vec3(0,1,0) : Vec3(1,0,0));
+                if (std::abs(w_vec.dot(temp_aux_vec)) > 0.99) { // If still too parallel (e.g. w_vec is Y axis, temp_aux_vec is Y axis)
+                    temp_aux_vec = Vec3(0,0,1); // Try Z-axis
+                     if (std::abs(w_vec.dot(temp_aux_vec)) > 0.99) { // If still too parallel (e.g. w_vec is Z axis)
+                         temp_aux_vec = Vec3(1,0,0); // Should be different now
+                     }
+                }
+
+
+                u_vec = temp_aux_vec.cross(w_vec);
+                if (u_vec.norm() < EPS) { // Handles case where w_vec and temp_aux_vec are parallel
+                    // Fallback: if normal is, e.g., (0,1,0), temp_aux_vec might be (0,1,0)
+                    // Try a different auxiliary vector
+                    if (std::abs(w_vec.y) > 0.9) temp_aux_vec = Vec3(1,0,0); // If normal is Y-ish, use X
+                    else temp_aux_vec = Vec3(0,1,0); // Otherwise use Y
+                    u_vec = temp_aux_vec.cross(w_vec);
+                }
+                u_vec.normalize();
+                v_vec = w_vec.cross(u_vec);
+                v_vec.normalize(); // v_vec is already normalized if w_vec and u_vec are ortho-normalized
+
+                // Calculate 4 corner vertices of the wall panel
+                Vec3 v0 = center_world - u_vec * (wall_width_world / 2.0) - v_vec * (wall_height_world / 2.0);
+                Vec3 v1 = center_world + u_vec * (wall_width_world / 2.0) - v_vec * (wall_height_world / 2.0);
+                Vec3 v2 = center_world + u_vec * (wall_width_world / 2.0) + v_vec * (wall_height_world / 2.0);
+                Vec3 v3 = center_world - u_vec * (wall_width_world / 2.0) + v_vec * (wall_height_world / 2.0);
+
+                // Create two triangles for the wall panel
+                Triangle* tri1 = new Triangle(v0, v1, v2, wallMaterial);
+                Triangle* tri2 = new Triangle(v0, v2, v3, wallMaterial);
+                
+                objects.push_back(tri1);
+                objects.push_back(tri2);
+            }
         } catch (const std::invalid_argument& ia) {
             // std::cerr << "Invalid argument: " << ia.what() << " on line: " << line << std::endl;
         } catch (const std::out_of_range& oor) {
@@ -1092,7 +1197,8 @@ void renderMovingSphere(const std::vector<Vec3>& ballWaypoints_simCoords,
                         LightSource& light, 
                         RGB ambientLight, 
                         ANTI_ALIASING aa, 
-                        ReflectionMethod reflMethod) {
+                        ReflectionMethod reflMethod,
+                        const std::string& outputDir) { // Added outputDir parameter
     
     // Create soccer ball sphere with the provided material
     SoccerBallSphere* movingSphere = new SoccerBallSphere(Vec3(0,0,0), 0.11, ballMaterial);
@@ -1149,7 +1255,7 @@ void renderMovingSphere(const std::vector<Vec3>& ballWaypoints_simCoords,
         screen.pov = 0.9; 
         processScreen(screen, camPos, objects, light, ambientLight, aa, reflMethod);
         std::ostringstream filenameStream;
-        filenameStream << "output/frame_" << std::setw(4) << std::setfill('0') << i << ".jpg";
+        filenameStream << outputDir << "/frame_" << std::setw(4) << std::setfill('0') << i << ".jpg"; // Use outputDir
         screen.writeToJPG(filenameStream.str());
     }
     objects.erase(std::remove(objects.begin(), objects.end(), movingSphere), objects.end());
@@ -1163,6 +1269,14 @@ int main(int argc, char* argv[]) {
     }
     ReflectionMethod reflMethod = (ReflectionMethod)atoi(argv[1]);
     MAX_DEPTH = (int)atoi(argv[2]);
+
+    std::string baseInputDir = "../01_KickSimulator/output/";
+    std::string baseOutputDir = "./output/";
+
+    // Create base output directory if it doesn't exist
+    if (!std::filesystem::exists(baseOutputDir)) {
+        std::filesystem::create_directories(baseOutputDir);
+    }
     
     Vec3 origin(0.0, 0.0, 0.0); // Camera for first view (if used)
     double radius = 3.0;  
@@ -1179,142 +1293,111 @@ int main(int argc, char* argv[]) {
     Metallic whiteMetal(RGB(255, 255, 255));
     CheckerboardMaterial checkerboard(RGB(34, 139, 34), RGB(0, 100, 0), radius); // Grassy green
     
-    // Create soccer ball material with traditional black and white colors
-    SoccerBallMaterial soccerBallMat(RGB(0, 0, 0), RGB(255, 255, 255)); // Black and white soccer ball
+    // Create enhanced soccer ball material with traditional black and white colors
+    SoccerBallMaterial soccerBallMat(RGB(20, 20, 20), RGB(240, 240, 240)); // Slightly off-pure for more realism
 
     std::vector<Shape*> objects; 
-
-    // Load Teapot (example, if obj file exists and is used)
-    // auto teapot_triangles = loadOBJ("teapot.obj", &redMetal);
-    // objects.insert(objects.end(), teapot_triangles.begin(), teapot_triangles.end());
-    // cout << "Loaded teapot: " << teapot_triangles.size() << " triangles have been loaded"  << endl;
-    // { // Transformations for teapot if loaded
-    //     Vec3 rotationAxis(0, 1, 0); double angle = M_PI / 2;
-    //     Vec3 teapotOffset(10, 0, -1); Vec3 rotationAxis2(1,0,0); double angle2 = M_PI/2;
-    //     for (Shape* shape : teapot_triangles) { /* ... apply rotations and translations ... */ }
-    // }
-
 
     // **Ground Plane**
     Plane floor(Vec3(0, 0, -1), Vec3(0, 0, 1), &checkerboard);
     // objects.push_back(&floor); // Will be added after clearing objects
 
-    // **Reduced Light source intensity** (this was likely the main issue)
-    LightSource light(Vec3(5, 5, 10), RGB(120, 120, 120)); // Reduced from 255 to 120
-    RGB ambientLight(30, 30, 30); // Reduced from 255 to 30
+    // **Enhanced Light source with better positioning and intensity**
+    LightSource light(Vec3(8, 8, 12), RGB(180, 180, 180)); // Increased intensity and better positioning
+    RGB ambientLight(45, 45, 45); // Increased ambient light for better visibility
 
-    objects.clear(); 
-    objects.push_back(&floor); 
+    for (const auto& entry : std::filesystem::directory_iterator(baseInputDir)) {
+        if (entry.is_regular_file()) {
+            std::string filename = entry.path().filename().string();
+            if (filename.rfind("wavepoints_", 0) == 0 && filename.find(".csv") != std::string::npos) {
+                std::cout << "Processing file: " << filename << std::endl;
+                std::string currentWavepointFile = entry.path().string();
+                std::string runName = filename.substr(0, filename.find(".csv"));
+                std::string currentOutputDir = baseOutputDir + runName + "/";
 
-    std::vector<Vec3> ballWaypoints_simCoords;
-    std::vector<Vec3> ballSpins_simCoords; // Currently unused for rendering
-    std::vector<Shape*> csv_wall_triangles_managed; // To store pointers for cleanup
-
-    // Load waypoints and wall from CSV
-    // Store current object count to identify added wall triangles
-    size_t objects_count_before_wall = objects.size();
-    Vec3 goalPosition_simCoords(0,0,0); // Initialize goal position
-    loadWaypointsAndObjectsFromCSV("/home/anthony/dev/Advanced-Simulation-in-Natural-Sciences/Free-kick-simulator/01_KickSimulator/output/wavepoints_0.csv", 
-                                   ballWaypoints_simCoords, ballSpins_simCoords, objects, &whiteMetal, goalPosition_simCoords);
-    size_t objects_count_after_wall = objects.size();
-
-    for (size_t i = objects_count_before_wall; i < objects_count_after_wall; ++i) {
-        csv_wall_triangles_managed.push_back(objects[i]);
-    }
-
-    // Find and export the first coordinate where the ball is seen coming over the wall
-    if (!csv_wall_triangles_managed.empty()) {
-        double wall_max_z_world = -std::numeric_limits<double>::infinity();
-        double min_wall_x_world = std::numeric_limits<double>::infinity();
-        double max_wall_x_world = -std::numeric_limits<double>::infinity();
-        double min_wall_y_world = std::numeric_limits<double>::infinity();
-        double max_wall_y_world = -std::numeric_limits<double>::infinity();
-
-        for (const auto& shape_ptr : csv_wall_triangles_managed) {
-            // Assuming wall objects are Triangles, as loaded by loadWaypointsAndObjectsFromCSV
-            const Triangle* tri = static_cast<const Triangle*>(shape_ptr);
-            const Vec3 vs[] = {tri->v1, tri->v2, tri->v3};
-            for (const auto& v : vs) {
-                if (v.z > wall_max_z_world) wall_max_z_world = v.z;
-                if (v.x < min_wall_x_world) min_wall_x_world = v.x;
-                if (v.x > max_wall_x_world) max_wall_x_world = v.x;
-                if (v.y < min_wall_y_world) min_wall_y_world = v.y;
-                if (v.y > max_wall_y_world) max_wall_y_world = v.y;
-            }
-        }
-        
-        Vec3 goalkeeper_pos_for_intersect(0.0, 32, 0.0); // Same as rendering camera
-
-        bool found_intersect_point = false;
-        for (size_t waypoint_idx = 0; waypoint_idx < ballWaypoints_simCoords.size(); ++waypoint_idx) {
-            const auto& waypoint_sim = ballWaypoints_simCoords[waypoint_idx];
-            Vec3 ball_world_pos;
-            ball_world_pos.x = waypoint_sim.x; // X (depth) maps directly
-            ball_world_pos.y = waypoint_sim.z; // Y (world width) gets Z from CSV waypoint (width)
-            ball_world_pos.z = waypoint_sim.y; // Z (world height) gets Y from CSV waypoint (height)
-
-            bool higher_than_wall = ball_world_pos.z > (wall_max_z_world + EPS);
-            bool horizontally_aligned = (ball_world_pos.x >= (min_wall_x_world - EPS) && ball_world_pos.x <= (max_wall_x_world + EPS) &&
-                                         ball_world_pos.y >= (min_wall_y_world - EPS) && ball_world_pos.y <= (max_wall_y_world + EPS));
-
-            if (higher_than_wall && horizontally_aligned) {
-                Ray los_ray(goalkeeper_pos_for_intersect, ball_world_pos - goalkeeper_pos_for_intersect);
-                los_ray.direction.normalize();
-                double dist_to_ball = (ball_world_pos - goalkeeper_pos_for_intersect).norm();
-                bool obstructed = false;
-
-                for (Shape* wall_shape : csv_wall_triangles_managed) {
-                    double t_intersect = wall_shape->solveRoot(los_ray);
-                    if (t_intersect > EPS && t_intersect < (dist_to_ball - EPS)) {
-                        obstructed = true;
-                        break;
-                    }
+                if (!std::filesystem::exists(currentOutputDir)) {
+                    std::filesystem::create_directories(currentOutputDir);
                 }
 
-                if (!obstructed) {
-                    std::ofstream outfile("output/wall_intersect.csv");
-                    if (outfile.is_open()) {
-                        outfile << "sim_x,sim_y,sim_z,waypoint_index\n"; // Header
-                        outfile << std::fixed << std::setprecision(6)
-                                << waypoint_sim.x << ","
-                                << waypoint_sim.y << ","
-                                << waypoint_sim.z << ","
-                                << waypoint_idx << "\n";
-                        outfile.close();
-                        found_intersect_point = true;
-                    } else {
-                        std::cerr << "Error: Could not open output/wall_intersect.csv for writing." << std::endl;
-                    }
-                    break; // Found the first point, exit loop
+                objects.clear(); 
+                objects.push_back(&floor); 
+
+                std::vector<Vec3> ballWaypoints_simCoords;
+                std::vector<Vec3> ballSpins_simCoords; 
+                std::vector<Shape*> csv_wall_triangles_managed; 
+
+                size_t objects_count_before_wall = objects.size();
+                Vec3 goalPosition_simCoords(0,0,0); 
+                loadWaypointsAndObjectsFromCSV(currentWavepointFile, 
+                                               ballWaypoints_simCoords, ballSpins_simCoords, objects, &whiteMetal, goalPosition_simCoords);
+                size_t objects_count_after_wall = objects.size();
+
+                for (size_t i = objects_count_before_wall; i < objects_count_after_wall; ++i) {
+                    csv_wall_triangles_managed.push_back(objects[i]);
                 }
-            }
-        }
-        if (!found_intersect_point) {
-            // ¯\_(ツ)_/¯ 
-        }
-    }
+
+                Vec3 goalkeeper_pos_world; 
+                goalkeeper_pos_world.x = goalPosition_simCoords.x; 
+                goalkeeper_pos_world.y = goalPosition_simCoords.z; 
+                goalkeeper_pos_world.z = goalPosition_simCoords.y; 
+
+                if (!csv_wall_triangles_managed.empty()) {
+                    bool found_intersect_point = false;
+                    for (size_t waypoint_idx = 0; waypoint_idx < ballWaypoints_simCoords.size(); ++waypoint_idx) {
+                        const auto& waypoint_sim = ballWaypoints_simCoords[waypoint_idx];
+                        Vec3 ball_world_pos;
+                        ball_world_pos.x = waypoint_sim.x; 
+                        ball_world_pos.y = waypoint_sim.z; 
+                        ball_world_pos.z = waypoint_sim.y; 
+
+                        Ray los_ray(goalkeeper_pos_world, ball_world_pos - goalkeeper_pos_world);
+                        los_ray.direction.normalize();
+                        double dist_to_ball = (ball_world_pos - goalkeeper_pos_world).norm();
+                        bool obstructed = false;
+
+                        for (Shape* wall_shape : csv_wall_triangles_managed) {
+                            double t_intersect = wall_shape->solveRoot(los_ray);
+                            if (t_intersect > EPS && t_intersect < (dist_to_ball - EPS)) {
+                                obstructed = true;
+                                break;
+                            }
+                        }
+
+                        if (!obstructed) {
+                            std::string wallIntersectFile = currentOutputDir + "wall_intersect.csv";
+                            std::ofstream outfile(wallIntersectFile);
+                            if (outfile.is_open()) {
+                                outfile << "sim_x,sim_y,sim_z,waypoint_index\\n"; 
+                                outfile << std::fixed << std::setprecision(6)
+                                        << waypoint_sim.x << ","
+                                        << waypoint_sim.y << ","
+                                        << waypoint_sim.z << ","
+                                        << waypoint_idx << "\\n";
+                                outfile.close();
+                                found_intersect_point = true;
+                            } else {
+                                std::cerr << "Error: Could not open " << wallIntersectFile << " for writing." << std::endl;
+                            }
+                            break; 
+                        }
+                    }
+                    if (!found_intersect_point) {
+                        // ¯\\_(ツ)_/¯ 
+                    }
+                }
     
-    // Define camera positions and screen normals (as Vec3)
-    // Vec3 freekick_cam_pos = origin; // Example: camera at origin for free kick view
-    // Vec3 freekick_screen_normal(1.0, 0.0, 0.0);
+                renderMovingSphere(ballWaypoints_simCoords, ballSpins_simCoords, goalkeeper_pos_world, objects, &soccerBallMat, light, ambientLight, AA_REGULAR_4, reflMethod, currentOutputDir);
 
-    Vec3 goalkeeper_pos_world; // Goalkeeper camera position in world coordinates
-    // Convert goal position from simulation coordinates (depth, height, width)
-    // to world coordinates (depth, width, height) for the camera.
-    goalkeeper_pos_world.x = goalPosition_simCoords.x; // X (depth) maps directly
-    goalkeeper_pos_world.y = goalPosition_simCoords.z; // Y (world width) gets Z from sim (width)
-    goalkeeper_pos_world.z = goalPosition_simCoords.y; // Z (world height) gets Y from sim (height)
-
-
-    // Render from goalkeeper's perspective using CSV waypoints with soccer ball material
-    renderMovingSphere(ballWaypoints_simCoords, ballSpins_simCoords, goalkeeper_pos_world, objects, &soccerBallMat, light, ambientLight, AA_REGULAR_4, reflMethod);
-
-    // Cleanup dynamically allocated wall triangles from CSV
-    for (Shape* wall_tri : csv_wall_triangles_managed) {
-        objects.erase(std::remove(objects.begin(), objects.end(), wall_tri), objects.end());
-        delete wall_tri;
+                for (Shape* wall_tri : csv_wall_triangles_managed) {
+                    objects.erase(std::remove(objects.begin(), objects.end(), wall_tri), objects.end());
+                    delete wall_tri;
+                }
+                csv_wall_triangles_managed.clear();
+                
+                std::cout << "Finished processing for " << filename << ". Output in " << currentOutputDir << std::endl;
+            }
+        }
     }
-    csv_wall_triangles_managed.clear();
 
     // Cleanup other dynamically allocated objects if any (e.g., teapot triangles if loaded)
     // for (Shape* shape : teapot_triangles) { delete shape; }
