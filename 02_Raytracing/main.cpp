@@ -12,6 +12,7 @@
 #include <sstream> // Required for std::stringstream
 #include <string>  // Required for std::string, std::stod
 #include <algorithm>
+#include <limits> // Required for std::numeric_limits
 #include "../01_KickSimulator/Vector.h" // Defines Vec3
 // #include "../01_KickSimulator/generate_free_kick_waypoints.h" // Removed
 
@@ -163,8 +164,10 @@ public:
     Vec3 center;
     double R;
     Material* material;
+    Vec3 currentRotationAxis; // Added for spin
+    double currentRotationAngle; // Added for spin
 
-    Sphere(Vec3 _center, double _R, Material* _material) : center(_center), R(_R), material(_material) {}
+    Sphere(Vec3 _center, double _R, Material* _material) : center(_center), R(_R), material(_material), currentRotationAxis(0,0,1), currentRotationAngle(0.0) {}
 
     Material* getMaterial() const override { return material; }
 
@@ -267,7 +270,7 @@ public:
         double d_coeff = 4.0 * (oDotO - sumR) * oDotD + 8.0 * R * R * o.z * d.z;
         double e = (oDotO - sumR) * (oDotO - sumR) - 4.0 * R * R * (r * r - o.z * o.z);
 
-        // Use Newton’s method to solve
+        // Use Newton's method to solve
         double initialGuess = 1.0;
         double root = newtonSolveQuartic(a, b, c, d_coeff, e, initialGuess);
 
@@ -601,6 +604,87 @@ public:
     }
 };
 
+class SoccerBallMaterial : public Material {
+public:
+    RGB pentagonColor;  // Color for pentagonal faces (traditionally black)
+    RGB hexagonColor;   // Color for hexagonal faces (traditionally white)
+    double mA, mD, mS, mSp, eta;
+    
+    SoccerBallMaterial(RGB _pentagonColor, RGB _hexagonColor) 
+        : pentagonColor(_pentagonColor), hexagonColor(_hexagonColor),
+          mA(0.1), mD(0.8), mS(0.1), mSp(10.0), eta(1.0) {}  // Reduced ambient and specular
+
+    RGB getObjectColor() const override { return RGB(255, 255, 255); } // Will be overridden
+    double getAmbientCoefficient() const override { return mA; }
+    double getDiffusionCoefficient() const override { return mD; }
+    double getSpecularCoefficient() const override { return mS; }
+    double getShininessCoefficient() const override { return mSp; }
+    double getRefractionIndex() const override { return eta; }
+
+    // Simplified soccer ball pattern using spherical coordinates
+    RGB getColorAtPoint(const Vec3& point, const Vec3& center) const {
+        // Convert point to sphere surface coordinates
+        Vec3 surfacePoint = (point - center);
+        surfacePoint.normalize();
+        
+        // Convert to spherical coordinates
+        double theta = atan2(surfacePoint.y, surfacePoint.x); // Azimuth angle
+        double phi = acos(surfacePoint.z);                    // Polar angle
+        
+        // Normalize angles to [0, 1] range
+        double u = (theta + M_PI) / (2.0 * M_PI);  // 0 to 1
+        double v = phi / M_PI;                      // 0 to 1
+        
+        // Create a simplified soccer ball pattern using trigonometric functions
+        // This creates a pattern that resembles pentagon and hexagon patches
+        
+        // Create pentagon-like regions (5-fold symmetry)
+        double pentagon_pattern = sin(5.0 * theta) * sin(3.0 * phi);
+        
+        // Create hexagon-like regions (6-fold symmetry)
+        double hexagon_pattern = sin(6.0 * theta + M_PI/6) * sin(4.0 * phi + M_PI/4);
+        
+        // Combine patterns to create soccer ball-like appearance
+        double pattern_value = pentagon_pattern * hexagon_pattern;
+        
+        // Add some randomness for more realistic appearance
+        double noise = sin(20.0 * theta) * sin(20.0 * phi) * 0.1;
+        pattern_value += noise;
+        
+        // Threshold to create distinct regions
+        if (pattern_value > 0.2) {
+            return pentagonColor;  // Black regions
+        } else {
+            return hexagonColor;   // White regions
+        }
+    }
+};
+
+// Soccer ball sphere class that handles the soccer ball pattern
+class SoccerBallSphere : public Sphere {
+public:
+    SoccerBallSphere(Vec3 _center, double _R, SoccerBallMaterial* _material) 
+        : Sphere(_center, _R, _material) {}
+    
+    Material* getMaterial() const override { return material; }
+    
+    RGB getColorAtPoint(const Vec3& point) const {
+        SoccerBallMaterial* soccerMat = dynamic_cast<SoccerBallMaterial*>(material);
+        
+        if (soccerMat) {
+            Vec3 rotatedPoint = point;
+            if (currentRotationAngle > EPS && currentRotationAxis.norm() > EPS) {
+                Vec3 localPoint = point - center;
+                localPoint = rotate(localPoint, currentRotationAxis, -currentRotationAngle);
+                rotatedPoint = center + localPoint;
+            }
+            return soccerMat->getColorAtPoint(rotatedPoint, center);
+        }
+        
+        return RGB(255, 255, 255); // Fallback
+    }
+};
+
 enum ReflectionMethod {
     FRESNEL,
     SCHLICK
@@ -632,6 +716,50 @@ RGB traceRay(Ray& ray, Screen& screen, vector<Shape*>& objects, int depth, Light
             // Apply checkerboard pattern
             CheckerboardMaterial* checkerboard = dynamic_cast<CheckerboardMaterial*>(hitMaterial);
             return checkerboard->getColorAtPoint(hitPoint);
+        }
+        
+        if (dynamic_cast<SoccerBallMaterial*>(hitMaterial)) {
+            // Handle soccer ball material
+            SoccerBallSphere* soccerSphere = dynamic_cast<SoccerBallSphere*>(closestObject);
+            if (soccerSphere) {
+                RGB patternColor = soccerSphere->getColorAtPoint(hitPoint);
+                
+                // Apply Phong lighting to the pattern color
+                Vec3 normal = closestObject->getSurfaceNormal(hitPoint);
+                normal.normalize();
+                
+                Vec3 L = (light.position - hitPoint);
+                L.normalize();
+                Vec3 V = (ray.origin - hitPoint);
+                V.normalize();
+                Vec3 R = (normal * (2 * normal.dot(L))) - L;
+                R.normalize();
+                
+                double mA = hitMaterial->getAmbientCoefficient();
+                double mD = hitMaterial->getDiffusionCoefficient();
+                double mS = hitMaterial->getSpecularCoefficient();
+                double mSp = hitMaterial->getShininessCoefficient();
+                
+                RGB ambient = patternColor * ambientLight * mA;
+                RGB diffuse = patternColor * light.intensity * mD * std::max(L.dot(normal), 0.0);
+                RGB specular = RGB(255, 255, 255) * light.intensity * mS * pow(std::max(V.dot(R), 0.0), mSp);
+                
+                RGB finalColor = ambient + diffuse + specular;
+                
+                // Shadow check
+                Vec3 shadowOrigin = hitPoint + normal * EPS;
+                Vec3 shadowDir = (light.position - shadowOrigin);
+                shadowDir.normalize();
+                Ray shadowRay(shadowOrigin, shadowDir);
+                
+                double t_shadow = closestObject->solveRoot(shadowRay);
+                if (t_shadow > EPS && t_shadow < (light.position - shadowOrigin).norm()) {
+                    finalColor = ambient; // Only ambient if in shadow
+                }
+                
+                finalColor.clamp();
+                return finalColor;
+            }
         }
     }
 
@@ -923,8 +1051,8 @@ void loadWaypointsAndObjectsFromCSV(
            segments.push_back(segment);
         }
 
-        if (segments.size() < 12) { // Expecting at least 12 columns
-            // std::cerr << "Skipping malformed CSV line: " << line << std::endl;
+        if (segments.size() < 9) { // Expecting at least 9 columns for ball or wall
+            // std::cerr << "Skipping malformed CSV line (not enough segments): " << line << std::endl;
             continue;
         }
 
@@ -936,9 +1064,10 @@ void loadWaypointsAndObjectsFromCSV(
 
             if (object_type == "ball") {
                 ballWaypoints_simCoords.emplace_back(csv_x, csv_y, csv_z); // Store in simulation coordinates
-                double spin_x = std::stod(segments[9]);
-                double spin_y = std::stod(segments[10]);
-                double spin_z = std::stod(segments[11]);
+                // Assuming orientation_x,y,z columns (6,7,8) are used for spin for ball objects
+                double spin_x = std::stod(segments[6]);
+                double spin_y = std::stod(segments[7]);
+                double spin_z = std::stod(segments[8]);
                 ballSpins_simCoords.emplace_back(spin_x, spin_y, spin_z);
             } else if (object_type == "wall") {
                 double wall_width = std::stod(segments[4]);
@@ -1001,18 +1130,29 @@ void loadWaypointsAndObjectsFromCSV(
     file.close();
 }
 
-
-void renderMovingSphere(const std::vector<Vec3>& ballWaypoints_simCoords, Vec3 camPos, std::vector<Shape*>& objects, Material* sphereMat, LightSource& light, RGB ambientLight, ANTI_ALIASING aa, ReflectionMethod reflMethod) {
-    Sphere* movingSphere = new Sphere(Vec3(0,0,0), 0.11, sphereMat);
+void renderMovingSphere(const std::vector<Vec3>& ballWaypoints_simCoords, 
+                        const std::vector<Vec3>& ballSpins_simCoords,
+                        Vec3 camPos, 
+                        std::vector<Shape*>& objects, 
+                        SoccerBallMaterial* ballMaterial,  // Back to SoccerBallMaterial*
+                        LightSource& light, 
+                        RGB ambientLight, 
+                        ANTI_ALIASING aa, 
+                        ReflectionMethod reflMethod) {
+    
+    // Create soccer ball sphere with the provided material
+    SoccerBallSphere* movingSphere = new SoccerBallSphere(Vec3(0,0,0), 0.11, ballMaterial);
     objects.push_back(movingSphere);
     
     int numFrames = ballWaypoints_simCoords.size();
     if (numFrames == 0) {
         std::cerr << "No waypoints provided for renderMovingSphere." << std::endl;
-        // Clean up sphere if added
         objects.erase(std::remove(objects.begin(), objects.end(), movingSphere), objects.end());
         delete movingSphere;
         return;
+    }
+    if (ballSpins_simCoords.size() != numFrames) {
+        std::cerr << "Mismatch between waypoint count and spin data count." << std::endl;
     }
 
     for (int i = 0; i < numFrames; ++i) {
@@ -1021,10 +1161,31 @@ void renderMovingSphere(const std::vector<Vec3>& ballWaypoints_simCoords, Vec3 c
         movingSphere->center.x = waypoint_sim.x; // X (depth) maps directly
         movingSphere->center.y = waypoint_sim.z; // Y (world width) gets Z from CSV waypoint (width)
         movingSphere->center.z = waypoint_sim.y; // Z (world height) gets Y from CSV waypoint (height)
+
+        // Account for spin
+        if (i < ballSpins_simCoords.size()) {
+            const Vec3& spin_sim = ballSpins_simCoords[i];
+            Vec3 spin_world;
+            spin_world.x = spin_sim.x; // X (depth) maps directly
+            spin_world.y = spin_sim.z; // Y (world width) gets Z from CSV spin (width component)
+            spin_world.z = spin_sim.y; // Z (world height) gets Y from CSV spin (height component)
+
+            double rot_angle = spin_world.norm();
+            Vec3 rot_axis_world = spin_world;
+
+            if (rot_angle > EPS) {
+                rot_axis_world = rot_axis_world / rot_angle; // Normalize the axis
+            } else {
+                rot_axis_world = Vec3(0, 0, 1); // Default axis if no spin
+                rot_angle = 0.0;
+            }
+            movingSphere->currentRotationAxis = rot_axis_world;
+            movingSphere->currentRotationAngle = rot_angle; 
+        }
         
-        // Dynamically calculate screenNormal to look at the ball
+        // Calculate screen normal to look at the ball
         Vec3 screenNormal = movingSphere->center - camPos;
-        if (screenNormal.norm() < EPS) { // Avoid issues if camera is at the ball's position
+        if (screenNormal.norm() < EPS) {
             screenNormal = Vec3(1,0,0); // Default to looking along X-axis
         } else {
             screenNormal.normalize();
@@ -1063,6 +1224,9 @@ int main(int argc, char* argv[]) {
     Metallic yellowMetal(RGB(255, 255, 0));
     Metallic whiteMetal(RGB(255, 255, 255));
     CheckerboardMaterial checkerboard(RGB(34, 139, 34), RGB(0, 100, 0), radius); // Grassy green
+    
+    // Create soccer ball material with traditional black and white colors
+    SoccerBallMaterial soccerBallMat(RGB(0, 0, 0), RGB(255, 255, 255)); // Black and white soccer ball
 
     std::vector<Shape*> objects; 
 
@@ -1081,9 +1245,9 @@ int main(int argc, char* argv[]) {
     Plane floor(Vec3(0, 0, -1), Vec3(0, 0, 1), &checkerboard);
     // objects.push_back(&floor); // Will be added after clearing objects
 
-    // **Light source**
-    LightSource light(Vec3(5, 5, 10), RGB(255, 255, 255)); // Adjusted light height
-    RGB ambientLight(50, 50, 50); // Adjusted ambient light
+    // **Reduced Light source intensity** (this was likely the main issue)
+    LightSource light(Vec3(5, 5, 10), RGB(120, 120, 120)); // Reduced from 255 to 120
+    RGB ambientLight(30, 30, 30); // Reduced from 255 to 30
 
     objects.clear(); 
     objects.push_back(&floor); 
@@ -1102,17 +1266,87 @@ int main(int argc, char* argv[]) {
     for (size_t i = objects_count_before_wall; i < objects_count_after_wall; ++i) {
         csv_wall_triangles_managed.push_back(objects[i]);
     }
+
+    // Find and export the first coordinate where the ball is seen coming over the wall
+    if (!csv_wall_triangles_managed.empty()) {
+        double wall_max_z_world = -std::numeric_limits<double>::infinity();
+        double min_wall_x_world = std::numeric_limits<double>::infinity();
+        double max_wall_x_world = -std::numeric_limits<double>::infinity();
+        double min_wall_y_world = std::numeric_limits<double>::infinity();
+        double max_wall_y_world = -std::numeric_limits<double>::infinity();
+
+        for (const auto& shape_ptr : csv_wall_triangles_managed) {
+            // Assuming wall objects are Triangles, as loaded by loadWaypointsAndObjectsFromCSV
+            const Triangle* tri = static_cast<const Triangle*>(shape_ptr);
+            const Vec3 vs[] = {tri->v1, tri->v2, tri->v3};
+            for (const auto& v : vs) {
+                if (v.z > wall_max_z_world) wall_max_z_world = v.z;
+                if (v.x < min_wall_x_world) min_wall_x_world = v.x;
+                if (v.x > max_wall_x_world) max_wall_x_world = v.x;
+                if (v.y < min_wall_y_world) min_wall_y_world = v.y;
+                if (v.y > max_wall_y_world) max_wall_y_world = v.y;
+            }
+        }
+        
+        Vec3 goalkeeper_pos_for_intersect(0.0, 32, 0.0); // Same as rendering camera
+
+        bool found_intersect_point = false;
+        for (size_t waypoint_idx = 0; waypoint_idx < ballWaypoints_simCoords.size(); ++waypoint_idx) {
+            const auto& waypoint_sim = ballWaypoints_simCoords[waypoint_idx];
+            Vec3 ball_world_pos;
+            ball_world_pos.x = waypoint_sim.x; // X (depth) maps directly
+            ball_world_pos.y = waypoint_sim.z; // Y (world width) gets Z from CSV waypoint (width)
+            ball_world_pos.z = waypoint_sim.y; // Z (world height) gets Y from CSV waypoint (height)
+
+            bool higher_than_wall = ball_world_pos.z > (wall_max_z_world + EPS);
+            bool horizontally_aligned = (ball_world_pos.x >= (min_wall_x_world - EPS) && ball_world_pos.x <= (max_wall_x_world + EPS) &&
+                                         ball_world_pos.y >= (min_wall_y_world - EPS) && ball_world_pos.y <= (max_wall_y_world + EPS));
+
+            if (higher_than_wall && horizontally_aligned) {
+                Ray los_ray(goalkeeper_pos_for_intersect, ball_world_pos - goalkeeper_pos_for_intersect);
+                los_ray.direction.normalize();
+                double dist_to_ball = (ball_world_pos - goalkeeper_pos_for_intersect).norm();
+                bool obstructed = false;
+
+                for (Shape* wall_shape : csv_wall_triangles_managed) {
+                    double t_intersect = wall_shape->solveRoot(los_ray);
+                    if (t_intersect > EPS && t_intersect < (dist_to_ball - EPS)) {
+                        obstructed = true;
+                        break;
+                    }
+                }
+
+                if (!obstructed) {
+                    std::ofstream outfile("output/wall_intersect.csv");
+                    if (outfile.is_open()) {
+                        outfile << "sim_x,sim_y,sim_z,waypoint_index\n"; // Header
+                        outfile << std::fixed << std::setprecision(6)
+                                << waypoint_sim.x << ","
+                                << waypoint_sim.y << ","
+                                << waypoint_sim.z << ","
+                                << waypoint_idx << "\n";
+                        outfile.close();
+                        found_intersect_point = true;
+                    } else {
+                        std::cerr << "Error: Could not open output/wall_intersect.csv for writing." << std::endl;
+                    }
+                    break; // Found the first point, exit loop
+                }
+            }
+        }
+        if (!found_intersect_point) {
+            // ¯\_(ツ)_/¯ 
+        }
+    }
     
     // Define camera positions and screen normals (as Vec3)
     // Vec3 freekick_cam_pos = origin; // Example: camera at origin for free kick view
     // Vec3 freekick_screen_normal(1.0, 0.0, 0.0);
 
-    Vec3 goalkeeper_pos(0.0, 0.0, 0.5); // Goalkeeper camera slightly above ground
-    // Vec3 goalkeeper_screen_normal(1.0, 0.0, 0.0); // Looking along +X (depth) - No longer needed here
+    Vec3 goalkeeper_pos(0.0, 32, 0.0); // Goalkeeper camera slightly above ground
 
-    // Render from goalkeeper's perspective using CSV waypoints
-    // The number of frames is determined by the number of waypoints in the CSV.
-    renderMovingSphere(ballWaypoints_simCoords, goalkeeper_pos, objects, &whiteMetal, light, ambientLight, AA_REGULAR_4, reflMethod);
+    // Render from goalkeeper's perspective using CSV waypoints with soccer ball material
+    renderMovingSphere(ballWaypoints_simCoords, ballSpins_simCoords, goalkeeper_pos, objects, &soccerBallMat, light, ambientLight, AA_REGULAR_4, reflMethod);
 
     // Cleanup dynamically allocated wall triangles from CSV
     for (Shape* wall_tri : csv_wall_triangles_managed) {
@@ -1124,7 +1358,6 @@ int main(int argc, char* argv[]) {
     // Cleanup other dynamically allocated objects if any (e.g., teapot triangles if loaded)
     // for (Shape* shape : teapot_triangles) { delete shape; }
     // teapot_triangles.clear();
-
 
     return 0;
 }
