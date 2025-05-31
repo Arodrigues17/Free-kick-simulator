@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "free-kick-simulator"
+version = "0.1.0"
+description = ""
+authors = ["André Glatzl <andreglatzl@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pyvista = "^0.45.2"
+matplotlib = "^3.10.3"
+pandas = "^2.2.3"
+numpy = "^2.2.6"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

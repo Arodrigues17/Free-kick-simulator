@@ -2,41 +2,47 @@
 #include <cmath>
 #include <iostream>
 
-class Vector {
+class Vec3 {
 public:
     double x, y, z;
 
-    Vector() : x(0), y(0), z(0) {}
-    Vector(double x, double y, double z) : x(x), y(y), z(z) {}
+    Vec3() : x(0), y(0), z(0) {}
+    Vec3(double x, double y, double z) : x(x), y(y), z(z) {}
 
-    Vector operator+(const Vector& v) const {
-        return Vector(x + v.x, y + v.y, z + v.z);
+    Vec3 operator+(const Vec3& v) const {
+        return Vec3(x + v.x, y + v.y, z + v.z);
     }
-    Vector operator-(const Vector& v) const {
-        return Vector(x - v.x, y - v.y, z - v.z);
+    Vec3 operator-(const Vec3& v) const {
+        return Vec3(x - v.x, y - v.y, z - v.z);
     }
-    Vector operator*(double s) const {
-        return Vector(x * s, y * s, z * s);
+    Vec3 operator*(double s) const {
+        return Vec3(x * s, y * s, z * s);
     }
-    friend Vector operator*(double s, const Vector& v) {
-        return Vector(v.x * s, v.y * s, v.z * s);
+    friend Vec3 operator*(double s, const Vec3& v) {
+        return Vec3(v.x * s, v.y * s, v.z * s);
     }
-    Vector operator-() const {
-        return Vector(-x, -y, -z);
+    Vec3 operator-() const {
+        return Vec3(-x, -y, -z);
     }
-    friend std::ostream& operator<<(std::ostream& os, const Vector& v) {
+    friend std::ostream& operator<<(std::ostream& os, const Vec3& v) {
         os << "x: " << v.x << ", y: " << v.y << ", z: " << v.z;
         return os;
     }
-    double dot(const Vector& v) const {
+    double dot(const Vec3& v) const {
         return x * v.x + y * v.y + z * v.z;
     }
-    Vector cross(const Vector& v) const {
-        return Vector(
+    Vec3 cross(const Vec3& v) const {
+        return Vec3(
             y * v.z - z * v.y,
             z * v.x - x * v.z,
             x * v.y - y * v.x
         );
+    }
+    Vec3 operator/(double s) const {
+        if (s == 0) {
+            throw std::runtime_error("Division by zero in Vec3.");
+        }
+        return Vec3(x / s, y / s, z / s);
     }
     void normalize() {
         double len = std::sqrt(x * x + y * y + z * z);

@@ -1042,7 +1042,7 @@ int main(int argc, char* argv[]) {
     // Randomize kick_start_z for the free kick
     std::random_device rd_kick_z;
     std::mt19937 gen_kick_z(rd_kick_z());
-    // Assuming goal width is 7.32, let's say kick can be from -3.0 to 3.0 for some variation
+
     std::uniform_real_distribution<> kick_z_dist(-10.0, 10.0);
     double random_kick_start_z = kick_z_dist(gen_kick_z);
 
