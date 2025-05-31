@@ -169,7 +169,7 @@ int main(int argc, char* argv[]) {
         csv << std::fixed << std::setprecision(4);
 
         for (const auto& p : trajectory) {
-            csv << p.x << "," << p.y << "," << p.z << ",ball,1,1,0,0,0\n";
+            csv << p.x << "," << p.y << "," << p.z << ",ball,1,1," << omega.x << "," << omega.y << "," << omega.z << "\n";
         }
 
         csv << wall_center.x << "," << wall_center.y << "," << wall_center.z
