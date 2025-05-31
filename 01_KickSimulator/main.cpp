@@ -53,7 +53,7 @@ void compute_forces(const Vec3& vel, const Vec3& omega, Vec3& F_drag, Vec3& F_li
     double V_ball = (4.0 / 3.0) * M_PI * std::pow(R, 3);
     F_buoyancy = {0.0, V_ball * rho * g, 0.0};
 
-    M_drag = {0.0, 0.0, 0.0}; // Ignore spin decay for now
+    M_drag = -0.5 * rho * Cm * A * v_mag * omega;
 }
 
 bool check_wall_collision(const Vec3& prev_pos, const Vec3& curr_pos, const Vec3& wall_center, const Vec3& to_goal) {
@@ -85,6 +85,11 @@ bool check_goal_collision(const Vec3& pos) {
            (pos.y >= 0.0 && pos.y <= goal_height);
 }
 
+struct BallState {
+    Vec3 pos;
+    Vec3 omega;
+};
+
 int main(int argc, char* argv[]) {
     if (argc < 9) {
         std::cerr << "Usage: " << argv[0] << " v0 angle_y direction_angle spin_x spin_y spin_z x0 y0 z0 [output_file]\n";
@@ -101,13 +106,11 @@ int main(int argc, char* argv[]) {
     double angle_y_rad = angle_y * M_PI / 180.0;
     double direction_rad = direction_angle * M_PI / 180.0;
 
-    // Initial direction vector toward goal
     Vec3 goal_center = {0.0, 0.0, 34.0};
     Vec3 to_goal = goal_center - start_pos;
     to_goal.y = 0;
     to_goal.normalize();
 
-    // Apply horizontal direction rotation (left/right)
     double cos_dir = cos(direction_rad);
     double sin_dir = sin(direction_rad);
     Vec3 to_shot = {
@@ -128,8 +131,8 @@ int main(int argc, char* argv[]) {
     const double dt = 0.01;
     const int max_steps = 10000;
     bool hit_wall = false, scored = false;
-    std::vector<Vec3> trajectory;
-    trajectory.push_back(pos);
+    std::vector<BallState> trajectory;
+    trajectory.push_back({pos, omega});
 
     Vec3 prev_pos = pos;
     for (int t = 0; t < max_steps; ++t) {
@@ -145,7 +148,7 @@ int main(int argc, char* argv[]) {
         pos = pos + vel * dt;
         omega = omega + domega * dt;
 
-        trajectory.push_back(pos);
+        trajectory.push_back({pos, omega});
 
         if (check_wall_collision(prev_pos, pos, wall_center, to_shot)) {
             std::cout << "Ball hit the wall at t = " << t * dt << " s.\n";
@@ -165,19 +168,20 @@ int main(int argc, char* argv[]) {
 
     if (!hit_wall && scored) {
         std::ofstream csv(output_file);
-        csv << "x,y,z,object_type,width,height,orientation_x,orientation_y,orientation_z\n";
+        csv << "x,y,z,object_type,width,height,orientation_x,orientation_y,orientation_z,spin_x,spin_y,spin_z\n";
         csv << std::fixed << std::setprecision(4);
 
-        for (const auto& p : trajectory) {
-            csv << p.x << "," << p.y << "," << p.z << ",ball,1,1," << omega.x << "," << omega.y << "," << omega.z << "\n";
+        for (const auto& state : trajectory) {
+            csv << state.pos.x << "," << state.pos.y << "," << state.pos.z
+                << ",ball,1,1,0,0,0," << state.omega.x << "," << state.omega.y << "," << state.omega.z << "\n";
         }
 
         csv << wall_center.x << "," << wall_center.y << "," << wall_center.z
             << ",wall," << wall_width << "," << wall_height << ","
-            << to_goal.x << "," << to_goal.y << "," << to_goal.z << "\n";
+            << to_goal.x << "," << to_goal.y << "," << to_goal.z << ",0,0,0\n";
 
         csv << goal_center.x << "," << goal_center.y << "," << goal_center.z
-            << ",goal," << goal_width << "," << goal_height << ",1,0,0\n";
+            << ",goal," << goal_width << "," << goal_height << ",1,0,0,0,0,0\n";
 
         csv.close();
         std::cout << "Trajectory written to " << output_file << "\n";
