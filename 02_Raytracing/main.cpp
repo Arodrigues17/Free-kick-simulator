@@ -1028,7 +1028,8 @@ void loadWaypointsAndObjectsFromCSV(
     std::vector<Vec3>& ballWaypoints_simCoords, // Output: ball trajectory points (simulation coordinates)
     std::vector<Vec3>& ballSpins_simCoords,     // Output: ball spin vectors (simulation coordinates)
     std::vector<Shape*>& objects,               // Input/Output: scene objects, to add wall to
-    Material* wallMaterial                      // Input: material for the wall
+    Material* wallMaterial,                     // Input: material for the wall
+    Vec3& goalPosition_simCoords                // Output: goal position (simulation coordinates)
 ) {
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -1069,58 +1070,11 @@ void loadWaypointsAndObjectsFromCSV(
                 double spin_y = std::stod(segments[7]);
                 double spin_z = std::stod(segments[8]);
                 ballSpins_simCoords.emplace_back(spin_x, spin_y, spin_z);
-            } else if (object_type == "wall") {
-                double wall_width = std::stod(segments[4]);
-                double wall_height = std::stod(segments[5]);
-                double orientation_csv_x = std::stod(segments[6]);
-                double orientation_csv_y = std::stod(segments[7]);
-                double orientation_csv_z = std::stod(segments[8]);
-
-                // Convert CSV wall coordinates and orientation to world coordinates
-                // CSV: x (depth), y (height), z (width)
-                // World: x (depth), y (width), z (height)
-                Vec3 center_world(csv_x, csv_z, csv_y); 
-                Vec3 normal_sim(orientation_csv_x, orientation_csv_y, orientation_csv_z);
-                Vec3 normal_world(normal_sim.x, normal_sim.z, normal_sim.y);
-                normal_world.normalize();
-
-                // Determine wall's local coordinate system in world space
-                Vec3 wall_surface_up_world;
-                Vec3 wall_surface_right_world;
-
-                // Assuming wall is mostly upright, its "up" is along world Z.
-                // If normal is (anti)parallel to world Z, wall is horizontal, use world Y as "up".
-                if (std::abs(normal_world.dot(Vec3(0,0,1))) > 0.99) { // Wall is horizontal or nearly so
-                    wall_surface_up_world = Vec3(0,1,0); // Use world Y as surface "up"
-                    wall_surface_right_world = wall_surface_up_world.cross(normal_world);
-                    if (wall_surface_right_world.norm() < EPS) { // normal_world is parallel to world Y
-                        wall_surface_right_world = Vec3(1,0,0).cross(normal_world); // Use world X instead
-                    }
-                } else { // Wall is upright or tilted
-                    wall_surface_up_world = Vec3(0,0,1); // Use world Z as surface "up"
-                    wall_surface_right_world = wall_surface_up_world.cross(normal_world);
-                }
-                wall_surface_right_world.normalize();
-                // Recalculate up to ensure orthogonality, normal_world is "outward" normal
-                wall_surface_up_world = normal_world.cross(wall_surface_right_world);
-                wall_surface_up_world.normalize();
-
-
-                Vec3 v_bl = center_world - wall_surface_right_world * (wall_width / 2.0) - wall_surface_up_world * (wall_height / 2.0);
-                Vec3 v_br = center_world + wall_surface_right_world * (wall_width / 2.0) - wall_surface_up_world * (wall_height / 2.0);
-                Vec3 v_tr = center_world + wall_surface_right_world * (wall_width / 2.0) + wall_surface_up_world * (wall_height / 2.0);
-                Vec3 v_tl = center_world - wall_surface_right_world * (wall_width / 2.0) + wall_surface_up_world * (wall_height / 2.0);
-
-                Triangle* wall_tri1 = new Triangle(v_bl, v_br, v_tr, wallMaterial);
-                Triangle* wall_tri2 = new Triangle(v_bl, v_tr, v_tl, wallMaterial);
-                
-                // Set normals for smooth shading (though wall is flat)
-                wall_tri1->normal = normal_world; wall_tri1->n1 = normal_world; wall_tri1->n2 = normal_world; wall_tri1->n3 = normal_world;
-                wall_tri2->normal = normal_world; wall_tri2->n1 = normal_world; wall_tri2->n2 = normal_world; wall_tri2->n3 = normal_world;
-
-                objects.push_back(wall_tri1);
-                objects.push_back(wall_tri2);
-            }
+            } else if (object_type == "goal") {
+                goalPosition_simCoords.x = csv_x;
+                goalPosition_simCoords.y = csv_y;
+                goalPosition_simCoords.z = csv_z;
+            } else
         } catch (const std::invalid_argument& ia) {
             // std::cerr << "Invalid argument: " << ia.what() << " on line: " << line << std::endl;
         } catch (const std::out_of_range& oor) {
@@ -1259,8 +1213,9 @@ int main(int argc, char* argv[]) {
     // Load waypoints and wall from CSV
     // Store current object count to identify added wall triangles
     size_t objects_count_before_wall = objects.size();
+    Vec3 goalPosition_simCoords(0,0,0); // Initialize goal position
     loadWaypointsAndObjectsFromCSV("/home/anthony/dev/Advanced-Simulation-in-Natural-Sciences/Free-kick-simulator/01_KickSimulator/output/wavepoints_0.csv", 
-                                   ballWaypoints_simCoords, ballSpins_simCoords, objects, &whiteMetal);
+                                   ballWaypoints_simCoords, ballSpins_simCoords, objects, &whiteMetal, goalPosition_simCoords);
     size_t objects_count_after_wall = objects.size();
 
     for (size_t i = objects_count_before_wall; i < objects_count_after_wall; ++i) {
@@ -1343,10 +1298,16 @@ int main(int argc, char* argv[]) {
     // Vec3 freekick_cam_pos = origin; // Example: camera at origin for free kick view
     // Vec3 freekick_screen_normal(1.0, 0.0, 0.0);
 
-    Vec3 goalkeeper_pos(0.0, 32, 0.0); // Goalkeeper camera slightly above ground
+    Vec3 goalkeeper_pos_world; // Goalkeeper camera position in world coordinates
+    // Convert goal position from simulation coordinates (depth, height, width)
+    // to world coordinates (depth, width, height) for the camera.
+    goalkeeper_pos_world.x = goalPosition_simCoords.x; // X (depth) maps directly
+    goalkeeper_pos_world.y = goalPosition_simCoords.z; // Y (world width) gets Z from sim (width)
+    goalkeeper_pos_world.z = goalPosition_simCoords.y; // Z (world height) gets Y from sim (height)
+
 
     // Render from goalkeeper's perspective using CSV waypoints with soccer ball material
-    renderMovingSphere(ballWaypoints_simCoords, ballSpins_simCoords, goalkeeper_pos, objects, &soccerBallMat, light, ambientLight, AA_REGULAR_4, reflMethod);
+    renderMovingSphere(ballWaypoints_simCoords, ballSpins_simCoords, goalkeeper_pos_world, objects, &soccerBallMat, light, ambientLight, AA_REGULAR_4, reflMethod);
 
     // Cleanup dynamically allocated wall triangles from CSV
     for (Shape* wall_tri : csv_wall_triangles_managed) {
