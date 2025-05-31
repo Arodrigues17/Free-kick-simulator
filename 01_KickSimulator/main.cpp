@@ -168,20 +168,20 @@ int main(int argc, char* argv[]) {
 
     if (!hit_wall && scored) {
         std::ofstream csv(output_file);
-        csv << "x,y,z,object_type,width,height,orientation_x,orientation_y,orientation_z,spin_x,spin_y,spin_z\n";
+        csv << "x,y,z,object_type,width,height,orientation_x,orientation_y,orientation_z\n";
         csv << std::fixed << std::setprecision(4);
 
         for (const auto& state : trajectory) {
             csv << state.pos.x << "," << state.pos.y << "," << state.pos.z
-                << ",ball,1,1,0,0,0," << state.omega.x << "," << state.omega.y << "," << state.omega.z << "\n";
+                << ",ball,1,1," << state.omega.x << "," << state.omega.y << "," << state.omega.z << "\n";
         }
 
         csv << wall_center.x << "," << wall_center.y << "," << wall_center.z
             << ",wall," << wall_width << "," << wall_height << ","
-            << to_goal.x << "," << to_goal.y << "," << to_goal.z << ",0,0,0\n";
+            << to_goal.x << "," << to_goal.y << "," << to_goal.z << "\n";
 
         csv << goal_center.x << "," << goal_center.y << "," << goal_center.z
-            << ",goal," << goal_width << "," << goal_height << ",1,0,0,0,0,0\n";
+            << ",goal," << goal_width << "," << goal_height << ",1,0,0\n";
 
         csv.close();
         std::cout << "Trajectory written to " << output_file << "\n";
