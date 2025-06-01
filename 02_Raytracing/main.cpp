@@ -1386,7 +1386,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
     
-                renderMovingSphere(ballWaypoints_simCoords, ballSpins_simCoords, goalkeeper_pos_world, objects, &soccerBallMat, light, ambientLight, AA_REGULAR_4, reflMethod, currentOutputDir);
+                renderMovingSphere(ballWaypoints_simCoords, ballSpins_simCoords, goalkeeper_pos_world, objects, &whiteMetal, light, ambientLight, AA_REGULAR_4, reflMethod, currentOutputDir);
 
                 for (Shape* wall_tri : csv_wall_triangles_managed) {
                     objects.erase(std::remove(objects.begin(), objects.end(), wall_tri), objects.end());
