@@ -474,7 +474,7 @@ public:
     Screen(Vec3 _n, int _w, int _h) : normal(_n), width(_w), height(_h) {
         pixels.reserve(width * height);
 
-        pov = normal.norm();
+        pov = normal.norm(); // 'normal' is the constructor argument _n via member initialization
 
         // Initialize pixels with default values
         for (int y = 0; y < height; ++y) {
@@ -483,29 +483,48 @@ public:
             }
         }
 
-        // Step 1: Define Simple Vectors (Before Rotation)
-        Vec3 simple_normal(1, 0, 0);
-        Vec3 simple_right(0, 1, 0);
-        Vec3 simple_up(0, 0, 1);
-
-        // Step 2: Compute Rotation Axis and Angle
-        Vec3 rotation_axis = simple_normal.cross(normal);
-        double rotation_angle = acos(simple_normal.dot(normal) / (simple_normal.norm() * normal.norm()));
-
-        // Step 3: Rotate Vectors
-        if (rotation_axis.norm() > EPS) { // Check if rotation is needed
-            right = rotate(simple_right, rotation_axis, rotation_angle);
-            up = rotate(simple_up, rotation_axis, rotation_angle);
-            this->normal = rotate(simple_normal, rotation_axis, rotation_angle); // Update screen normal
-        } else { // No rotation needed or normal is parallel
-            right = simple_right;
-            up = simple_up;
-            this->normal = simple_normal;
-             if (simple_normal.dot(normal) < 0) { // Flipped normal
-                right = -right; // Adjust orientation if normal was flipped
-                this->normal = -this->normal;
-            }
+        // Stabilize camera orientation by defining 'up' relative to global Z-axis
+        // First, ensure this->normal is the normalized view direction.
+        // The constructor argument _n is initially assigned to the member 'this->normal'.
+        if (this->pov > EPS) {
+            this->normal = this->normal / this->pov; // Normalize the member 'normal'
+        } else {
+            this->normal = Vec3(1,0,0); // Default view direction if _n was zero
+            if (this->pov < EPS) this->pov = 1.0; // Default pov if _n was zero vector
         }
+
+        Vec3 globalUpDirection(0, 0, 1); // World Z-axis is considered 'up'
+
+        // Calculate screen's right vector (camera's local X-axis)
+        // right = cross(globalUp, viewDirection)
+        this->right = globalUpDirection.cross(this->normal);
+        if (this->right.norm() < EPS) {
+            // Camera's view direction (this->normal) is parallel to globalUpDirection.
+            // (e.g., looking straight up or down along Z-axis).
+            // In this case, define 'right' along the global X-axis.
+            // If this->normal is (0,0,1) or (0,0,-1), Vec3(1,0,0) is orthogonal.
+            this->right = Vec3(1, 0, 0);
+            // If view direction is (0,0,1), right becomes (1,0,0). up = (0,0,1).cross(1,0,0) = (0,-1,0)
+            // If view direction is (0,0,-1), right becomes (1,0,0). up = (0,0,-1).cross(1,0,0) = (0,1,0)
+            // To ensure up is (0,1,0) when looking down Z, and (0,-1,0) when looking up Z (consistent with right-handed system if X is right, Y is up, Z is forward)
+            // we might need to adjust based on the sign of this->normal.z
+            if (this->normal.z > 0) { // Looking up along Z
+                 this->up = Vec3(0, -1, 0); // up should be -Y global
+            } else { // Looking down along Z or other cases where right was (1,0,0)
+                 this->up = Vec3(0, 1, 0); // up should be +Y global
+            }
+            this->up.normalize(); // Should already be normalized
+            return; // Skip the rest of the calculation as up and right are set
+
+        } else {
+            this->right.normalize();
+        }
+
+        // Calculate screen's up vector (camera's local Y-axis)
+        // up = cross(viewDirection, right)
+        this->up = this->normal.cross(this->right);
+        this->up.normalize(); // this->up should already be normalized if this->normal and this->right are ortho-normalized.
+        // The vectors (this->right, this->up, this->normal) now form a stable orthonormal basis.
     }
 
     std::vector<Pixel>::iterator begin() { return pixels.begin(); }
@@ -1367,12 +1386,12 @@ int main(int argc, char* argv[]) {
                             std::string wallIntersectFile = currentOutputDir + "wall_intersect.csv";
                             std::ofstream outfile(wallIntersectFile);
                             if (outfile.is_open()) {
-                                outfile << "sim_x,sim_y,sim_z,waypoint_index\\n"; 
+                                outfile << "sim_x,sim_y,sim_z,waypoint_index" << std::endl; 
                                 outfile << std::fixed << std::setprecision(6)
                                         << waypoint_sim.x << ","
                                         << waypoint_sim.y << ","
                                         << waypoint_sim.z << ","
-                                        << waypoint_idx << "\\n";
+                                        << waypoint_idx << std::endl;
                                 outfile.close();
                                 found_intersect_point = true;
                             } else {
@@ -1386,7 +1405,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
     
-                renderMovingSphere(ballWaypoints_simCoords, ballSpins_simCoords, goalkeeper_pos_world, objects, &whiteMetal, light, ambientLight, AA_REGULAR_4, reflMethod, currentOutputDir);
+                renderMovingSphere(ballWaypoints_simCoords, ballSpins_simCoords, goalkeeper_pos_world, objects, &soccerBallMat, light, ambientLight, AA_REGULAR_4, reflMethod, currentOutputDir);
 
                 for (Shape* wall_tri : csv_wall_triangles_managed) {
                     objects.erase(std::remove(objects.begin(), objects.end(), wall_tri), objects.end());
