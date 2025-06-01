@@ -650,51 +650,53 @@ public:
         double theta = atan2(localPoint.y, localPoint.x); // Azimuthal angle [-π, π]
         double phi = acos(localPoint.z);                   // Polar angle [0, π]
         
-        // Normalize angles to [0, 1] range
         double u = (theta + M_PI) / (2.0 * M_PI);  // [0, 1]
         double v = phi / M_PI;                      // [0, 1]
         
-        // Create multiple pattern layers for more realistic soccer ball appearance
+        // Enhanced pattern generation for more distinct features
+
+        // Pentagon pattern (dark patches) - sharper and more defined
+        double pentagon_scale_factor = 4.0; // Original scale
+        double p_u_norm = fmod(u * pentagon_scale_factor, 1.0);
+        double p_v_norm = fmod(v * pentagon_scale_factor, 1.0);
+        double pentagon_component = 0.5 + 0.5 * cos(p_u_norm * 2.0 * M_PI * 2.0) * cos(p_v_norm * 2.0 * M_PI * 2.0);
+        pentagon_component = pow(pentagon_component, 3.5); // Increased sharpness (original was 2.0)
+
+        // Hexagon pattern (background filler) - slightly sharper
+        double hexagon_scale_factor = 6.0; // Original scale
+        double h_u_norm = fmod(u * hexagon_scale_factor + 0.5, 1.0);
+        double h_v_norm = fmod(v * hexagon_scale_factor + 0.25, 1.0);
+        double hexagon_component = 0.5 + 0.5 * cos(h_u_norm * 2.0 * M_PI * 3.0) * cos(h_v_norm * 2.0 * M_PI * 3.0);
+        hexagon_component = pow(hexagon_component, 2.0); // Increased sharpness (original was 1.5)
         
-        // Primary pentagon pattern - creates large black patches
-        double pentagon_scale = 4.0;
-        double pentagon_u = fmod(u * pentagon_scale, 1.0);
-        double pentagon_v = fmod(v * pentagon_scale, 1.0);
+        // Noise component - slightly reduced influence
+        double noise_factor = 20.0; // Original scale
+        double noise_value = 0.5 + 0.5 * sin(u * noise_factor) * cos(v * noise_factor * 1.3);
         
-        // Create pentagon-like shapes using smooth functions
-        double pentagon_pattern = 0.5 + 0.5 * cos(pentagon_u * 2.0 * M_PI * 2.0) * cos(pentagon_v * 2.0 * M_PI * 2.0);
-        pentagon_pattern = pow(pentagon_pattern, 2.0); // Make edges sharper
+        // Seam lines - make them more pronounced
+        double seam_u_param = fmod(u * 10.0, 1.0); // Slightly reduced frequency from 12.0
+        double seam_v_param = fmod(v * 7.0, 1.0);  // Slightly reduced frequency from 8.0
+        double seam_sharpness_coeff = 75.0; // Original was 50.0, increased for sharper seams
+        double seam_mask = 1.0 - exp(-seam_sharpness_coeff * std::min(seam_u_param, 1.0 - seam_u_param) * std::min(seam_v_param, 1.0 - seam_v_param));
+        // seam_mask is close to 0 on seams, 1 away from seams.
+
+        // Combine components: Adjust weights for better contrast
+        double pattern_mix = pentagon_component * 0.70 + hexagon_component * 0.25 + noise_value * 0.05; // Pentagons more weight, noise less
         
-        // Secondary hexagon pattern - creates smaller white patches
-        double hexagon_scale = 6.0;
-        double hexagon_u = fmod(u * hexagon_scale + 0.5, 1.0);
-        double hexagon_v = fmod(v * hexagon_scale + 0.25, 1.0);
+        // Apply seam mask: seams should make the pattern dark.
+        pattern_mix *= seam_mask; 
         
-        double hexagon_pattern = 0.5 + 0.5 * cos(hexagon_u * 2.0 * M_PI * 3.0) * cos(hexagon_v * 2.0 * M_PI * 3.0);
-        hexagon_pattern = pow(hexagon_pattern, 1.5);
-        
-        // Combine patterns with some randomness for more organic look
-        double noise_scale = 20.0;
-        double noise = 0.5 + 0.5 * sin(u * noise_scale) * cos(v * noise_scale * 1.3);
-        
-        // Create curved seam lines
-        double seam_u = fmod(u * 12.0, 1.0);
-        double seam_v = fmod(v * 8.0, 1.0);
-        double seam_pattern = 1.0 - exp(-50.0 * min(seam_u, 1.0 - seam_u) * min(seam_v, 1.0 - seam_v));
-        
-        // Combine all patterns
-        double final_pattern = pentagon_pattern * 0.6 + hexagon_pattern * 0.3 + noise * 0.1;
-        final_pattern *= seam_pattern; // Apply seam masking
-        
-        // Add some variation based on latitude to break symmetry
-        double latitude_variation = 0.5 + 0.3 * sin(phi * 3.0) * cos(theta * 2.0);
-        final_pattern *= latitude_variation;
-        
-        // Threshold to determine black vs white
-        if (final_pattern > 0.45) {
-            return hexagonColor; // White patches
+        // Latitude variation - slightly reduce its impact
+        double lat_var_component = 0.5 + 0.25 * sin(phi * 3.0) * cos(theta * 2.0); // Slightly reduced amplitude from 0.3
+        // Modulate overall brightness slightly by latitude variation, ensure base is high enough
+        pattern_mix *= (0.9 + lat_var_component * 0.2); // Original was (0.5 + 0.3 * sin * cos) directly multiplying.
+
+        // Threshold for black vs white
+        // A lower pattern_mix value should result in pentagonColor (dark)
+        if (pattern_mix > 0.38) { // Adjusted threshold (original was 0.45)
+            return hexagonColor; 
         } else {
-            return pentagonColor; // Black patches
+            return pentagonColor; 
         }
     }
 };
@@ -788,8 +790,8 @@ RGB traceRay(Ray& ray, Screen& screen, vector<Shape*>& objects, int depth, Light
                 RGB subsurfaceColor = patternColor * light.intensity * subsurface;
                 
                 // Enhanced specular with color-dependent highlights
-                RGB specularColor = (patternColor * 0.3 + RGB(255, 255, 255) * 0.7); // Blend with white for realistic highlights
-                RGB specular = specularColor * light.intensity * mS * pow(std::max(V.dot(R), 0.0), mSp);
+                RGB specularHighlightColor = RGB(230, 230, 230); // Brighter, more consistent white highlight
+                RGB specular = specularHighlightColor * light.intensity * mS * pow(std::max(V.dot(R), 0.0), mSp);
                 
                 RGB finalColor = ambient + diffuse + subsurfaceColor + specular;
                 
@@ -812,7 +814,8 @@ RGB traceRay(Ray& ray, Screen& screen, vector<Shape*>& objects, int depth, Light
                 }
                 
                 if (inShadow) {
-                    finalColor = ambient + subsurfaceColor * 0.5; // Softer shadows
+                    // Make shadows a bit more pronounced but retain some colored ambient and subsurface
+                    finalColor = ambient * 0.9 + subsurfaceColor * 0.6; // Adjusted shadow color
                 }
                 
                 finalColor.clamp();
