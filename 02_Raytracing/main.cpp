@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <limits> // Required for std::numeric_limits
 #include <filesystem> // Added for directory operations
+#include <map> // Required for std::map
 #include "../01_KickSimulator/Vector.h" // Defines Vec3
 // #include "../01_KickSimulator/generate_free_kick_waypoints.h" // Removed
 
@@ -59,11 +60,15 @@ public:
 
     // Component-wise multiplication (RGB * RGB)
     RGB operator*(const RGB& other) const {
-        return RGB(r * other.r, g * other.g, b * other.b);
+        return RGB( static_cast<int>((static_cast<long long>(r) * other.r) / 255.0),
+                    static_cast<int>((static_cast<long long>(g) * other.g) / 255.0),
+                    static_cast<int>((static_cast<long long>(b) * other.b) / 255.0) );
     }
 
     RGB& operator*=(const RGB& other) {
-        r *= other.r; g *= other.g; b *= other.b;
+        r = static_cast<int>((static_cast<long long>(r) * other.r) / 255.0);
+        g = static_cast<int>((static_cast<long long>(g) * other.g) / 255.0);
+        b = static_cast<int>((static_cast<long long>(b) * other.b) / 255.0);
         return *this;
     }
 
@@ -624,112 +629,79 @@ public:
     }
 };
 
-class SoccerBallMaterial : public Material {
+// New Simple Soccer Ball Material
+class SimpleSoccerBallMaterial : public Material {
 public:
-    RGB pentagonColor;  // Color for pentagonal faces (traditionally black)
-    RGB hexagonColor;   // Color for hexagonal faces (traditionally white)
+    RGB panelColor1;
+    RGB panelColor2;
     double mA, mD, mS, mSp, eta;
-    
-    SoccerBallMaterial(RGB _pentagonColor, RGB _hexagonColor) 
-        : pentagonColor(_pentagonColor), hexagonColor(_hexagonColor),
-          mA(0.15), mD(0.85), mS(0.6), mSp(25.0), eta(1.0) {}  // Enhanced material properties
 
-    RGB getObjectColor() const override { return RGB(255, 255, 255); } // Will be overridden
+    SimpleSoccerBallMaterial(RGB c1, RGB c2)
+        : panelColor1(c1), panelColor2(c2),
+          mA(0.25), mD(0.85), mS(0.3), mSp(15.0), eta(1.0) {} // Adjusted material properties slightly
+
+    RGB getObjectColor() const override { return RGB(255,255,255); } // Placeholder
     double getAmbientCoefficient() const override { return mA; }
     double getDiffusionCoefficient() const override { return mD; }
     double getSpecularCoefficient() const override { return mS; }
     double getShininessCoefficient() const override { return mSp; }
     double getRefractionIndex() const override { return eta; }
 
-    // Improved soccer ball pattern that creates a more realistic appearance
     RGB getColorAtPoint(const Vec3& point, const Vec3& sphereCenter) const {
         Vec3 localPoint = point - sphereCenter;
-        localPoint.normalize(); // Point on unit sphere centered at origin
+        localPoint.normalize();
 
-        // Convert to spherical coordinates
-        double theta = atan2(localPoint.y, localPoint.x); // Azimuthal angle [-π, π]
-        double phi = acos(localPoint.z);                   // Polar angle [0, π]
-        
-        double u = (theta + M_PI) / (2.0 * M_PI);  // [0, 1]
-        double v = phi / M_PI;                      // [0, 1]
-        
-        // Enhanced pattern generation for more distinct features
+        // Convert to spherical coordinates (phi: polar, theta: azimuthal)
+        double theta = atan2(localPoint.y, localPoint.x); // Azimuthal angle [-PI, PI]
+        // Ensure z component is within acos valid range [-1, 1]
+        double z_clamped = std::max(-1.0, std::min(1.0, localPoint.z));
+        double phi = acos(z_clamped);                     // Polar angle [0, PI]
 
-        // Pentagon pattern (dark patches) - sharper and more defined
-        double pentagon_scale_factor = 4.0; // Original scale
-        double p_u_norm = fmod(u * pentagon_scale_factor, 1.0);
-        double p_v_norm = fmod(v * pentagon_scale_factor, 1.0);
-        double pentagon_component = 0.5 + 0.5 * cos(p_u_norm * 2.0 * M_PI * 2.0) * cos(p_v_norm * 2.0 * M_PI * 2.0);
-        pentagon_component = pow(pentagon_component, 3.5); // Increased sharpness (original was 2.0)
+        // Normalize to [0,1] range for UV coordinates
+        double u = (theta + M_PI) / (2.0 * M_PI); // [0, 1]
+        double v = phi / M_PI;                    // [0, 1]
 
-        // Hexagon pattern (background filler) - slightly sharper
-        double hexagon_scale_factor = 6.0; // Original scale
-        double h_u_norm = fmod(u * hexagon_scale_factor + 0.5, 1.0);
-        double h_v_norm = fmod(v * hexagon_scale_factor + 0.25, 1.0);
-        double hexagon_component = 0.5 + 0.5 * cos(h_u_norm * 2.0 * M_PI * 3.0) * cos(h_v_norm * 2.0 * M_PI * 3.0);
-        hexagon_component = pow(hexagon_component, 2.0); // Increased sharpness (original was 1.5)
-        
-        // Noise component - slightly reduced influence
-        double noise_factor = 20.0; // Original scale
-        double noise_value = 0.5 + 0.5 * sin(u * noise_factor) * cos(v * noise_factor * 1.3);
-        
-        // Seam lines - make them more pronounced
-        double seam_u_param = fmod(u * 10.0, 1.0); // Slightly reduced frequency from 12.0
-        double seam_v_param = fmod(v * 7.0, 1.0);  // Slightly reduced frequency from 8.0
-        double seam_sharpness_coeff = 75.0; // Original was 50.0, increased for sharper seams
-        double seam_mask = 1.0 - exp(-seam_sharpness_coeff * std::min(seam_u_param, 1.0 - seam_u_param) * std::min(seam_v_param, 1.0 - seam_v_param));
-        // seam_mask is close to 0 on seams, 1 away from seams.
+        // Create a checkerboard pattern
+        int u_segments = 8; // Number of segments along u (longitude)
+        int v_segments = 5; // Number of segments along v (latitude)
 
-        // Combine components: Adjust weights for better contrast
-        double pattern_mix = pentagon_component * 0.70 + hexagon_component * 0.25 + noise_value * 0.05; // Pentagons more weight, noise less
-        
-        // Apply seam mask: seams should make the pattern dark.
-        pattern_mix *= seam_mask; 
-        
-        // Latitude variation - slightly reduce its impact
-        double lat_var_component = 0.5 + 0.25 * sin(phi * 3.0) * cos(theta * 2.0); // Slightly reduced amplitude from 0.3
-        // Modulate overall brightness slightly by latitude variation, ensure base is high enough
-        pattern_mix *= (0.9 + lat_var_component * 0.2); // Original was (0.5 + 0.3 * sin * cos) directly multiplying.
+        bool u_check = (static_cast<int>(u * u_segments) % 2 == 0);
+        bool v_check = (static_cast<int>(v * v_segments) % 2 == 0);
 
-        // Threshold for black vs white
-        // A lower pattern_mix value should result in pentagonColor (dark)
-        if (pattern_mix > 0.38) { // Adjusted threshold (original was 0.45)
-            return hexagonColor; 
-        } else {
-            return pentagonColor; 
-        }
+        return (u_check == v_check) ? panelColor1 : panelColor2;
     }
 };
 
-class SoccerBallSphere : public Sphere {
+
+// New Simple Soccer Ball Sphere
+class SimpleSoccerBallSphere : public Sphere {
 public:
-    SoccerBallSphere(Vec3 _center, double _R, SoccerBallMaterial* _material) 
+    SimpleSoccerBallSphere(Vec3 _center, double _R, SimpleSoccerBallMaterial* _material)
         : Sphere(_center, _R, _material) {}
-    
+
     Material* getMaterial() const override { return material; }
-    
+
     RGB getColorAtPoint(const Vec3& point) const {
-        SoccerBallMaterial* soccerMat = dynamic_cast<SoccerBallMaterial*>(material);
-        
-        if (soccerMat) {
+        SimpleSoccerBallMaterial* simpleMat = dynamic_cast<SimpleSoccerBallMaterial*>(material);
+        if (simpleMat) {
             Vec3 rotatedPoint = point;
-            // Apply rotation if there's spin
             if (currentRotationAngle > EPS && currentRotationAxis.norm() > EPS) {
                 Vec3 localPoint = point - center;
                 localPoint = rotate(localPoint, currentRotationAxis, -currentRotationAngle);
                 rotatedPoint = center + localPoint;
             }
-            return soccerMat->getColorAtPoint(rotatedPoint, center);
+            return simpleMat->getColorAtPoint(rotatedPoint, center);
         }
-        
         return RGB(255, 255, 255); // Fallback
     }
 };
+
 
 enum ReflectionMethod {
     FRESNEL,
     SCHLICK
 };
+
 
 RGB traceRay(Ray& ray, Screen& screen, vector<Shape*>& objects, int depth, LightSource& light, RGB& ambientLight, ReflectionMethod reflMethod) {
     if (depth > MAX_DEPTH) return RGB(0, 0, 0); // Prevent infinite recursion
@@ -759,43 +731,35 @@ RGB traceRay(Ray& ray, Screen& screen, vector<Shape*>& objects, int depth, Light
             return checkerboard->getColorAtPoint(hitPoint);
         }
         
-        if (dynamic_cast<SoccerBallMaterial*>(hitMaterial)) {
-            // Handle soccer ball material with improved lighting
-            SoccerBallSphere* soccerSphere = dynamic_cast<SoccerBallSphere*>(closestObject);
+        // Handle SIMPLE soccer ball material
+        if (dynamic_cast<SimpleSoccerBallMaterial*>(hitMaterial)) {
+            SimpleSoccerBallSphere* soccerSphere = dynamic_cast<SimpleSoccerBallSphere*>(closestObject);
             if (soccerSphere) {
-                RGB patternColor = soccerSphere->getColorAtPoint(hitPoint);
-                
-                // Apply enhanced Phong lighting to the pattern color
                 Vec3 normal = closestObject->getSurfaceNormal(hitPoint);
                 normal.normalize();
+                
+                RGB patternColor = soccerSphere->getColorAtPoint(hitPoint);
                 
                 Vec3 L = (light.position - hitPoint);
                 L.normalize();
                 Vec3 V = (ray.origin - hitPoint);
                 V.normalize();
-                Vec3 R = (normal * (2 * normal.dot(L))) - L;
-                R.normalize();
+                Vec3 R_reflect = (normal * (2 * normal.dot(L))) - L; // Renamed R to R_reflect
+                R_reflect.normalize();
                 
                 double mA = hitMaterial->getAmbientCoefficient();
                 double mD = hitMaterial->getDiffusionCoefficient();
                 double mS = hitMaterial->getSpecularCoefficient();
                 double mSp = hitMaterial->getShininessCoefficient();
                 
-                // Enhanced lighting calculation
                 RGB ambient = patternColor * ambientLight * mA;
                 RGB diffuse = patternColor * light.intensity * mD * std::max(L.dot(normal), 0.0);
+                RGB specular = RGB(120, 120, 120) * light.intensity * mS * 
+                               pow(std::max(V.dot(R_reflect), 0.0), mSp); // Used R_reflect
                 
-                // Add subtle subsurface scattering effect for more realistic soccer ball
-                double subsurface = std::max(0.0, -L.dot(normal)) * 0.3;
-                RGB subsurfaceColor = patternColor * light.intensity * subsurface;
-                
-                // Enhanced specular with color-dependent highlights
-                RGB specularHighlightColor = RGB(230, 230, 230); // Brighter, more consistent white highlight
-                RGB specular = specularHighlightColor * light.intensity * mS * pow(std::max(V.dot(R), 0.0), mSp);
-                
-                RGB finalColor = ambient + diffuse + subsurfaceColor + specular;
-                
-                // Shadow check with soft shadow effect
+                RGB phongColor = ambient + diffuse + specular; // Renamed finalColor to phongColor for consistency
+
+                // Shadow check for simple soccer ball
                 Vec3 shadowOrigin = hitPoint + normal * EPS;
                 Vec3 shadowDir = (light.position - shadowOrigin);
                 double lightDistance = shadowDir.norm();
@@ -812,14 +776,13 @@ RGB traceRay(Ray& ray, Screen& screen, vector<Shape*>& objects, int depth, Light
                         }
                     }
                 }
-                
+
                 if (inShadow) {
-                    // Make shadows a bit more pronounced but retain some colored ambient and subsurface
-                    finalColor = ambient * 0.9 + subsurfaceColor * 0.6; // Adjusted shadow color
+                    phongColor = ambient; // Only ambient if in shadow
                 }
                 
-                finalColor.clamp();
-                return finalColor;
+                phongColor.clamp();
+                return phongColor;
             }
         }
     }
@@ -850,7 +813,7 @@ RGB traceRay(Ray& ray, Screen& screen, vector<Shape*>& objects, int depth, Light
     // **Phong Lighting Model**
     RGB ambient = objectColor * ambientLight * mA;
     RGB diffuse = objectColor * light.intensity * mD * std::max(L.dot(normal), 0.0);
-    RGB specular = RGB(1, 1, 1) * light.intensity * mS * pow(std::max(V.dot(R), 0.0), mSp);
+    RGB specular = RGB(255, 255, 255) * light.intensity * mS * pow(std::max(V.dot(R), 0.0), mSp); // Changed RGB(1,1,1) to RGB(255,255,255)
 
     RGB phongColor = ambient + diffuse + specular;
 
@@ -1211,19 +1174,230 @@ void loadWaypointsAndObjectsFromCSV(
     file.close();
 }
 
+// --- Text Rendering Start ---
+
+// Basic 5x7 pixel font data
+// '1' represents a lit pixel, '0' or ' ' an unlit one.
+const std::map<char, std::vector<std::string>> FONT_DATA = {
+    {'0', {"01110",
+           "01010",
+           "01010",
+           "01010",
+           "01010",
+           "01010",
+           "01110"}},
+    {'1', {"00100",
+           "01100",
+           "00100",
+           "00100",
+           "00100",
+           "00100",
+           "01110"}},
+    {'2', {"01110",
+           "00010",
+           "00010",
+           "01110",
+           "01000",
+           "01000",
+           "01110"}},
+    {'3', {"01110",
+           "00010",
+           "00010",
+           "00110",
+           "00010",
+           "00010",
+           "01110"}},
+    {'4', {"01010",
+           "01010",
+           "01010",
+           "01110",
+           "00010",
+           "00010",
+           "00010"}},
+    {'5', {"01110",
+           "01000",
+           "01000",
+           "01110",
+           "00010",
+           "00010",
+           "01110"}},
+    {'6', {"01110",
+           "01000",
+           "01000",
+           "01110",
+           "01010",
+           "01010",
+           "01110"}},
+    {'7', {"01110",
+           "00010",
+           "00010",
+           "00100",
+           "00100",
+           "00100",
+           "00100"}},
+    {'8', {"01110",
+           "01010",
+           "01010",
+           "01110",
+           "01010",
+           "01010",
+           "01110"}},
+    {'9', {"01110",
+           "01010",
+           "01010",
+           "01110",
+           "00010",
+           "00010",
+           "01110"}},
+    {'.', {"00000",
+           "00000",
+           "00000",
+           "00000",
+           "00000",
+           "00100",
+           "00100"}},
+    {':', {"00000",
+           "00100",
+           "00100",
+           "00000",
+           "00100",
+           "00100",
+           "00000"}},
+    {' ', {"00000",
+           "00000",
+           "00000",
+           "00000",
+           "00000",
+           "00000",
+           "00000"}},
+    {'s', {"00000",
+           "01110",
+           "01000",
+           "01110",
+           "00010",
+           "01110",
+           "00000"}},
+    {'t', {"00100",  // lowercase 't'
+           "00100",
+           "01110",
+           "00100",
+           "00100",
+           "00100",
+           "00110"}},
+    {'T', {"01110",
+           "00100",
+           "00100",
+           "00100",
+           "00100",
+           "00100",
+           "00100"}},
+    {'i', {"00100",
+           "00000",
+           "00100",
+           "00100",
+           "00100",
+           "00100",
+           "00100"}},
+    {'m', {"00000",
+           "01010",
+           "11111",
+           "10101",
+           "10101",
+           "10001",
+           "00000"}},
+    {'e', {"00000",
+           "01110",
+           "01010",
+           "01110",
+           "01000",
+           "01110",
+           "00000"}},
+    {'o', {"00000",
+           "01110",
+           "01010",
+           "01010",
+           "01010",
+           "01110",
+           "00000"}},
+    {'G', {"01110",
+           "01000",
+           "01000",
+           "01011",
+           "01010",
+           "01010",
+           "01110"}},
+    {'a', {"00000",
+           "01110",
+           "00010",
+           "01110",
+           "01010",
+           "01110",
+           "00000"}},
+    {'l', {"00100",
+           "00100",
+           "00100",
+           "00100",
+           "00100",
+           "00100",
+           "00110"}}
+};
+
+const int FONT_CHAR_WIDTH = 5;
+const int FONT_CHAR_HEIGHT = 7;
+const int FONT_CHAR_SPACING = 1;
+
+void drawChar(std::vector<Pixel>& pixels, int screen_width, int screen_height,
+              char c, int start_x, int start_y, RGB color, int scale) { // Added scale parameter
+    auto it = FONT_DATA.find(c);
+    if (it == FONT_DATA.end()) return; // Character not in font
+
+    const auto& char_pattern = it->second;
+    
+    for (int r = 0; r < FONT_CHAR_HEIGHT; ++r) {
+        if (r >= char_pattern.size()) continue;
+        const std::string& row_pattern = char_pattern[r];
+        for (int col = 0; col < FONT_CHAR_WIDTH; ++col) {
+            if (col >= row_pattern.length()) continue;
+            if (row_pattern[col] == '1' || row_pattern[col] == '#') {
+                for (int sr = 0; sr < scale; ++sr) { // Scale pixel block
+                    for (int sc = 0; sc < scale; ++sc) {
+                        int px = start_x + col * scale + sc;
+                        int py = start_y + r * scale + sr;
+                        if (px >= 0 && px < screen_width && py >= 0 && py < screen_height) {
+                            pixels[py * screen_width + px].color = color;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void drawText(Screen& screen, const std::string& text_to_draw,
+              int x, int y, RGB color, int scale) { // Added scale parameter
+    int current_x = x;
+    for (char c : text_to_draw) {
+        drawChar(screen.pixels, screen.width, screen.height, c, current_x, y, color, scale);
+        current_x += (FONT_CHAR_WIDTH + FONT_CHAR_SPACING) * scale; // Adjust spacing for scale
+    }
+}
+
+// --- Text Rendering End ---
+
+
 void renderMovingSphere(const std::vector<Vec3>& ballWaypoints_simCoords, 
                         const std::vector<Vec3>& ballSpins_simCoords,
                         Vec3 camPos, 
                         std::vector<Shape*>& objects, 
-                        SoccerBallMaterial* ballMaterial,  // Back to SoccerBallMaterial*
+                        SimpleSoccerBallMaterial* ballMaterial,  // Changed to SimpleSoccerBallMaterial
                         LightSource& light, 
                         RGB ambientLight, 
                         ANTI_ALIASING aa, 
                         ReflectionMethod reflMethod,
                         const std::string& outputDir) { // Added outputDir parameter
     
-    // Create soccer ball sphere with the provided material
-    SoccerBallSphere* movingSphere = new SoccerBallSphere(Vec3(0,0,0), 0.11, ballMaterial);
+    // Create simple soccer ball sphere
+    SimpleSoccerBallSphere* movingSphere = new SimpleSoccerBallSphere(Vec3(0,0,0), 0.11, ballMaterial);
     objects.push_back(movingSphere);
     
     int numFrames = ballWaypoints_simCoords.size();
@@ -1276,6 +1450,26 @@ void renderMovingSphere(const std::vector<Vec3>& ballWaypoints_simCoords,
         Screen screen(screenNormal, 2560, 1440);
         screen.pov = 0.9; 
         processScreen(screen, camPos, objects, light, ambientLight, aa, reflMethod);
+
+        // Calculate and draw time to goal
+        double time_per_frame = 0.1; // Assuming 10 waypoints per second from typical simulation output
+        double time_to_goal = (numFrames - 1 - i) * time_per_frame;
+        if (time_to_goal < 0.0) time_to_goal = 0.0; // Ensure non-negative
+
+        std::ostringstream time_text_stream;
+        time_text_stream << std::fixed << std::setprecision(1) << "Time to Goal: " << time_to_goal << " s";
+        std::string time_text = time_text_stream.str();
+        
+        int font_scale = 4; // Increased font scale for larger text
+        int text_margin_x = 10 * font_scale; // Scale margin as well
+        int text_margin_y = 10 * font_scale;
+        int text_start_x = text_margin_x;
+        // Adjust y position based on scaled font height
+        int text_start_y = screen.height - (FONT_CHAR_HEIGHT * font_scale) - text_margin_y; 
+        RGB text_color(255, 255, 255); // White text
+
+        drawText(screen, time_text, text_start_x, text_start_y, text_color, font_scale);
+
         std::ostringstream filenameStream;
         filenameStream << outputDir << "/frame_" << std::setw(4) << std::setfill('0') << i << ".jpg"; // Use outputDir
         screen.writeToJPG(filenameStream.str());
@@ -1315,8 +1509,11 @@ int main(int argc, char* argv[]) {
     Metallic whiteMetal(RGB(255, 255, 255));
     CheckerboardMaterial checkerboard(RGB(34, 139, 34), RGB(0, 100, 0), radius); // Grassy green
     
-    // Create enhanced soccer ball material with traditional black and white colors
-    SoccerBallMaterial soccerBallMat(RGB(20, 20, 20), RGB(240, 240, 240)); // Slightly off-pure for more realism
+    // Use SimpleSoccerBallMaterial
+    SimpleSoccerBallMaterial soccerBallMat( // Renamed from simpleSoccerMat to soccerBallMat for consistency
+        RGB(15, 15, 15),    // Dark panels (slightly lighter than before)
+        RGB(230, 230, 230)  // Light panels (slightly darker than pure white, lighter than before)
+    );
 
     std::vector<Shape*> objects; 
 
@@ -1324,9 +1521,9 @@ int main(int argc, char* argv[]) {
     Plane floor(Vec3(0, 0, -1), Vec3(0, 0, 1), &checkerboard);
     // objects.push_back(&floor); // Will be added after clearing objects
 
-    // **Enhanced Light source with better positioning and intensity**
-    LightSource light(Vec3(8, 8, 12), RGB(180, 180, 180)); // Increased intensity and better positioning
-    RGB ambientLight(45, 45, 45); // Increased ambient light for better visibility
+    // **Enhanced Light source with better positioning and intensity for soccer ball visibility**
+    LightSource light(Vec3(6, 6, 18), RGB(220, 220, 220)); // Higher, brighter light
+    RGB ambientLight(85, 85, 85); // Slightly increased ambient light from (70,70,70)
 
     for (const auto& entry : std::filesystem::directory_iterator(baseInputDir)) {
         if (entry.is_regular_file()) {
@@ -1408,7 +1605,8 @@ int main(int argc, char* argv[]) {
                     }
                 }
     
-                renderMovingSphere(ballWaypoints_simCoords, ballSpins_simCoords, goalkeeper_pos_world, objects, &soccerBallMat, light, ambientLight, AA_REGULAR_4, reflMethod, currentOutputDir);
+                renderMovingSphere(ballWaypoints_simCoords, ballSpins_simCoords, goalkeeper_pos_world, 
+                                   objects, &soccerBallMat, light, ambientLight, AA_REGULAR_4, reflMethod, currentOutputDir);
 
                 for (Shape* wall_tri : csv_wall_triangles_managed) {
                     objects.erase(std::remove(objects.begin(), objects.end(), wall_tri), objects.end());
