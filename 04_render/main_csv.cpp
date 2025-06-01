@@ -1,7 +1,6 @@
 // ---------------------------------------------------------------------------
 // main.cpp — Render ball, wall, goal from CSV wavepoints, matching physical scale
 //            and applying foot offset + orientation so they appear more "correct".
-//            + Auto-play frames from wavepoints_*.csv
 // ---------------------------------------------------------------------------
 
 #include <iostream>
@@ -232,8 +231,8 @@ bool loadObjMesh(const std::string& filename,
     if(!err.empty())  std::cerr<<"TinyOBJ err:  "<<err<<"\n";
     if(!ret) return false;
     if(shapes.empty()){
-        std::cerr<<"No shapes in "<<filename<<"\n";
-        return false;
+    std::cerr<<"No shapes in "<<filename<<"\n";
+    return false;
     }
 
     std::vector<float> vertexData;
@@ -383,15 +382,59 @@ GLuint compileShader(GLenum type,const char* src)
 std::vector<CSVLine> g_ballFrames;
 CSVLine g_wallData;
 CSVLine g_goalData;
+int g_currentFrame=0;
 
-// The current frame we’re displaying
-int g_currentFrame = 0;
+bool loadCSV(const std::string& csvPath)
+{
+    std::ifstream ifs(csvPath);
+    if(!ifs.is_open()){
+        std::cerr<<"Cannot open "<<csvPath<<"\n";
+        return false;
+    }
+    std::string line;
+    bool skipHeader=true;
+    while(std::getline(ifs,line))
+    {
+        if(skipHeader){ skipHeader=false; continue;} // skip first line
+        std::stringstream ss(line);
+        std::vector<std::string> token;
+        std::string tk;
+        while(std::getline(ss,tk,',')) token.push_back(tk);
+        if(token.size()<9) continue;
+
+        CSVLine row;
+        row.x= std::stof(token[0]);
+        row.y= std::stof(token[1]);
+        row.z= std::stof(token[2]);
+        row.objectType= token[3];
+        row.width= std::stof(token[4]);
+        row.height=std::stof(token[5]);
+        row.oriX= std::stof(token[6]);
+        row.oriY= std::stof(token[7]);
+        row.oriZ= std::stof(token[8]);
+
+        if(row.objectType=="ball"){
+            g_ballFrames.push_back(row);
+        } else if(row.objectType=="wall"){
+            g_wallData= row;
+        } else if(row.objectType=="goal"){
+            g_goalData= row;
+        }
+    }
+    std::cout<<"Loaded CSV: ball="<<g_ballFrames.size()
+             <<", wall=("<<g_wallData.x<<","<<g_wallData.y<<","<<g_wallData.z<<")"
+             <<" w="<<g_wallData.width<<" h="<<g_wallData.height
+             <<", goal=("<<g_goalData.x<<","<<g_goalData.y<<","<<g_goalData.z<<")"
+             <<" w="<<g_goalData.width<<" h="<<g_goalData.height
+             <<"\n";
+    return true;
+}
 
 // camera & PBR
 bool  g_followCam= false;
-float g_rough   = 0.3f;
-float g_metal   = 0.f;
-float g_exposure= 1.5f;
+float g_rough=0.3f;
+float g_metal=0.f;
+float g_exposure=1.5f;
 
 // We'll store plane, ball, wall, goal
 MeshGL g_planeMesh;
@@ -406,70 +449,17 @@ BoundingBox g_goalBox;
 
 // textures
 GLuint grassDiff, grassNorm, grassRgh;
-GLuint ballDiff,  ballNorm,  ballRgh;
-GLuint goalDiff,  goalNorm,  goalRgh;
-GLuint wallDiff,  wallNorm,  wallRgh;
+GLuint ballDiff, ballNorm, ballRgh;
+GLuint goalDiff, goalNorm, goalRgh;
+GLuint wallDiff, wallNorm, wallRgh;
 
-bool loadCSV(const std::string& csvPath)
-{
-    std::ifstream ifs(csvPath);
-    if(!ifs.is_open()){
-        std::cerr << "Cannot open " << csvPath << "\n";
-        return false;
-    }
-    std::string line;
-    bool skipHeader=true;
-    while(std::getline(ifs,line))
-    {
-        if(skipHeader){ 
-            skipHeader=false; 
-            continue; 
-        } // skip first line
-
-        std::stringstream ss(line);
-        std::vector<std::string> token;
-        std::string tk;
-        while(std::getline(ss,tk,',')) token.push_back(tk);
-        if(token.size()<9) continue;
-
-        CSVLine row;
-        row.x= std::stof(token[0]);
-        row.y= std::stof(token[1]);
-        row.z= std::stof(token[2]);
-        row.objectType= token[3];
-        row.width = std::stof(token[4]);
-        row.height= std::stof(token[5]);
-        row.oriX  = std::stof(token[6]);
-        row.oriY  = std::stof(token[7]);
-        row.oriZ  = std::stof(token[8]);
-
-        if(row.objectType=="ball"){
-            g_ballFrames.push_back(row);
-        }
-        else if(row.objectType=="wall"){
-            g_wallData= row;
-        }
-        else if(row.objectType=="goal"){
-            g_goalData= row;
-        }
-    }
-    std::cout << "Loaded CSV: ball=" << g_ballFrames.size()
-              << ", wall=(" << g_wallData.x <<","<< g_wallData.y <<","<< g_wallData.z <<")"
-              << " w="<< g_wallData.width <<" h="<< g_wallData.height
-              << ", goal=(" << g_goalData.x <<","<< g_goalData.y <<","<< g_goalData.z <<")"
-              << " w="<< g_goalData.width <<" h="<< g_goalData.height
-              << "\n";
-    return true;
-}
-
-// build plane
 void buildPlane(MeshGL& mesh,float s=100.f)
 {
     float vb[]={
-        -s,0,-s,   0,1,0,  0,0,
-         s,0,-s,   0,1,0,  1,0,
-         s,0, s,   0,1,0,  1,1,
-        -s,0, s,   0,1,0,  0,1
+        -s,0,-s,   0,1,0, 0,0,
+         s,0,-s,   0,1,0, 1,0,
+         s,0, s,   0,1,0, 1,1,
+        -s,0, s,   0,1,0, 0,1
     };
     unsigned int ib[]={0,1,2, 2,3,0};
 
@@ -478,55 +468,51 @@ void buildPlane(MeshGL& mesh,float s=100.f)
     glGenBuffers(1,&mesh.ebo);
 
     glBindVertexArray(mesh.vao);
+      glBindBuffer(GL_ARRAY_BUFFER,mesh.vbo);
+      glBufferData(GL_ARRAY_BUFFER,sizeof(vb),vb,GL_STATIC_DRAW);
 
-    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vb), vb, GL_STATIC_DRAW);
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,mesh.ebo);
+      glBufferData(GL_ELEMENT_ARRAY_BUFFER,sizeof(ib),ib,GL_STATIC_DRAW);
 
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.ebo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(ib), ib, GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,8*sizeof(float),(void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,8*sizeof(float),(void*)(3*sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,8*sizeof(float),(void*)(6*sizeof(float)));
-    glEnableVertexAttribArray(2);
+      glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,8*sizeof(float),(void*)0);
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,8*sizeof(float),(void*)(3*sizeof(float)));
+      glEnableVertexAttribArray(1);
+      glVertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,8*sizeof(float),(void*)(6*sizeof(float)));
+      glEnableVertexAttribArray(2);
 
     glBindVertexArray(0);
-
     mesh.indexCount=6;
 }
 
 int main()
 {
-    // GLFW init
     if(!glfwInit()){
         std::cerr<<"glfw init fail\n";
         return -1;
     }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR,3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR,3);
-    GLFWwindow* win= glfwCreateWindow(1280,720,"CSV Demo (Auto-play frames)",nullptr,nullptr);
+    GLFWwindow* win= glfwCreateWindow(1280,720,"Scaled CSV Demo w/ offset & orientation",nullptr,nullptr);
     if(!win){
         std::cerr<<"Failed create GLFW window\n";
         glfwTerminate();
         return -1;
     }
     glfwMakeContextCurrent(win);
-
     if(!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)){
         std::cerr<<"Fail init GLAD\n";
         return -1;
     }
     glfwSwapInterval(1);
 
-    // ImGui init
+    // ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui_ImplGlfw_InitForOpenGL(win,true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
-    // compile shaders
+    // compile
     GLuint vs= compileShader(GL_VERTEX_SHADER,   VERT_SHADER);
     GLuint fs= compileShader(GL_FRAGMENT_SHADER, FRAG_SHADER);
     GLuint prog= glCreateProgram();
@@ -539,60 +525,54 @@ int main()
 
     // load ball, measure
     if(!loadObjMesh("assets/soccer_ball.obj","assets/", g_ballMesh)){
-        std::cerr<<"Fail soccer_ball.obj\n";
-        return -1;
+        std::cerr<<"Fail soccer_ball.obj\n";return -1;
     }
     g_ballBox= measureMesh(g_ballMesh);
 
     // load goal
     if(!loadObjMesh("assets/goal.obj","assets/", g_goalMesh)){
-        std::cerr<<"Fail goal.obj\n";
-        return -1;
+        std::cerr<<"Fail goal.obj\n";return -1;
     }
     g_goalBox= measureMesh(g_goalMesh);
 
     // load wall
     if(!loadObjMesh("assets/Man.obj","assets/", g_wallMesh)){
-        std::cerr<<"Fail Man.obj\n";
-        return -1;
+        std::cerr<<"Fail Man.obj\n";return -1;
     }
     g_wallBox= measureMesh(g_wallMesh);
 
-    // load textures
+    // textures
     grassDiff= loadTex("assets/grass_diffuse.png");
     grassNorm= loadTex("assets/grass_normal.png");
     grassRgh = loadTex("assets/grass_roughness.png");
 
-    ballDiff = loadTex("assets/ball_diffuse.jpg");
-    ballNorm = loadTex("assets/ball_normal.jpg");
-    ballRgh  = loadTex("assets/ball_roughness.jpg");
+    ballDiff= loadTex("assets/ball_diffuse.jpg");
+    ballNorm= loadTex("assets/ball_normal.jpg");
+    ballRgh = loadTex("assets/ball_roughness.jpg");
 
-    goalDiff = loadTex("assets/goal_diffuse.png");
-    goalNorm = loadTex("assets/goal_normal.png");
-    goalRgh  = loadTex("assets/goal_roughness.png");
+    goalDiff= loadTex("assets/goal_diffuse.png");
+    goalNorm= loadTex("assets/goal_normal.png");
+    goalRgh = loadTex("assets/goal_roughness.png");
 
-    wallDiff = loadTex("assets/Man_BaseColor.png");
-    wallNorm = loadTex("assets/Man_Normal.png");
-    wallRgh  = loadTex("assets/Man_Roughness.png");
+    wallDiff= loadTex("assets/Man_BaseColor.png");
+    wallNorm= loadTex("assets/Man_Normal.png");
+    wallRgh = loadTex("assets/Man_Roughness.png");
 
-    // set up uniforms
     glUseProgram(prog);
-    GLint uM   = glGetUniformLocation(prog,"model");
-    GLint uV   = glGetUniformLocation(prog,"view");
-    GLint uP   = glGetUniformLocation(prog,"proj");
-    GLint uLP  = glGetUniformLocation(prog,"lightPos");
-    GLint uLC  = glGetUniformLocation(prog,"lightColor");
-    GLint uCP  = glGetUniformLocation(prog,"camPos");
-    GLint uR   = glGetUniformLocation(prog,"roughness");
-    GLint uMet = glGetUniformLocation(prog,"metallic");
-    GLint uExp = glGetUniformLocation(prog,"exposure");
-    GLint uObj = glGetUniformLocation(prog,"objectType");
+    GLint uM  = glGetUniformLocation(prog,"model");
+    GLint uV  = glGetUniformLocation(prog,"view");
+    GLint uP  = glGetUniformLocation(prog,"proj");
+    GLint uLP = glGetUniformLocation(prog,"lightPos");
+    GLint uLC = glGetUniformLocation(prog,"lightColor");
+    GLint uCP = glGetUniformLocation(prog,"camPos");
+    GLint uR  = glGetUniformLocation(prog,"roughness");
+    GLint uMet= glGetUniformLocation(prog,"metallic");
+    GLint uExp= glGetUniformLocation(prog,"exposure");
+    GLint uObj= glGetUniformLocation(prog,"objectType");
 
-    // light
-    glUniform3f(uLP,0.0f,30.0f,30.0f);
-    glUniform3f(uLC,3.0f,3.0f,3.0f);
+    glUniform3f(uLP,0,30,30);
+    glUniform3f(uLC,3,3,3);
 
-    // sampler
     glUniform1i(glGetUniformLocation(prog,"grass_albedo"),    0);
     glUniform1i(glGetUniformLocation(prog,"grass_normal"),    1);
     glUniform1i(glGetUniformLocation(prog,"grass_roughness"), 2);
@@ -609,98 +589,103 @@ int main()
     glUniform1i(glGetUniformLocation(prog,"wall_normal"),     10);
     glUniform1i(glGetUniformLocation(prog,"wall_roughness"),  11);
 
-    // projection
     int wScr,hScr;
     glfwGetFramebufferSize(win,&wScr,&hScr);
-    glm::mat4 projMat= glm::perspective(glm::radians(45.f), float(wScr)/float(hScr), 0.1f, 500.f);
+    glm::mat4 projMat= glm::perspective(glm::radians(45.f), float(wScr)/float(hScr),0.1f,500.f);
     glUniformMatrix4fv(uP,1,GL_FALSE, glm::value_ptr(projMat));
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
 
-    // load wavepoints CSV
-    if(!loadCSV("output/wavepoints_1.csv")){
-        std::cerr << "Check wavepoints_1.csv\n";
+    // load CSV
+    if(!loadCSV("wavepoints_1.csv")){
+        std::cerr<<"Check wavepoints_1.csv\n";
     }
-    // If no ball frames found, add a default
     if(g_ballFrames.empty()){
         g_ballFrames.push_back({0,0,0,"ball",1,1,0,0,0});
     }
 
-    // g_goalData.z    = -30.0f;
-    // g_goalData.oriY = 180.0f;
-
-    float frameInterval = 0.016f; 
-    float timeAccum     = 0.0f;
-
-    // main loop
-    double lastTime = glfwGetTime();
+    double lastTime= glfwGetTime();
     while(!glfwWindowShouldClose(win))
     {
-        double now = glfwGetTime();
-        float dt   = float(now - lastTime);
-        lastTime   = now;
+        double now= glfwGetTime();
+        float dt= float(now- lastTime);
+        lastTime= now;
 
         glfwPollEvents();
-
-        // ---------------------------
-        //  AUTO-PLAY FRAMES
-        // ---------------------------
-        timeAccum += dt;
-        if(timeAccum >= frameInterval)
-        {
-            timeAccum = 0.0f;
-            g_currentFrame++;
-            // 不循环：到最后一帧就停住
-            if(g_currentFrame >= (int)g_ballFrames.size())
-                g_currentFrame = (int)g_ballFrames.size()-1;
-        }
-
-        // ---------------------------
-        //  Setup ImGui
-        // ---------------------------
+        if(g_currentFrame < 0) g_currentFrame = 0;
+        if(g_currentFrame >= (int)g_ballFrames.size())
+            g_currentFrame = (int)g_ballFrames.size() - 1;
+        
+        CSVLine& ballLine = g_ballFrames[g_currentFrame];
+        // ImGui
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-
+        
+        
         ImGui::Begin("Controls");
-        ImGui::Text("Frame index: %d / %d", g_currentFrame, (int)g_ballFrames.size()-1);
-        if(ImGui::Button("Reset to 0")) {
-            g_currentFrame = 0;
-            timeAccum      = 0.0f;
-        }
-        ImGui::Checkbox("Follow cam", &g_followCam);
-        ImGui::SliderFloat("Exposure", &g_exposure, 0.1f, 5.f);
-        ImGui::SliderFloat("Roughness",&g_rough,    0.f,   1.f);
-        ImGui::SliderFloat("Metallic", &g_metal,    0.f,   1.f);
+        ImGui::SliderInt("Frame index",&g_currentFrame,0,(int)g_ballFrames.size()-1);
+        if(ImGui::Button("Reset idx")) g_currentFrame=0;
+        ImGui::Checkbox("Follow cam",&g_followCam);
+        ImGui::SliderFloat("Exposure",&g_exposure,0.1f,5.f);
+        ImGui::SliderFloat("Roughness",&g_rough,0.f,1.f);
+        ImGui::SliderFloat("Metallic",&g_metal,0.f,1.f);
+        ImGui::SeparatorText("Ball Debug");
+        ImGui::Text("Ball CSV: (%.2f, %.2f, %.2f)", ballLine.x, ballLine.y, ballLine.z);
+        ImGui::Text("Ball bbox Y: min=%.2f, max=%.2f", g_ballBox.vmin.y, g_ballBox.vmax.y);
+        ImGui::Text("CSV Wall Center: (%.2f, %.2f, %.2f)", 
+            g_wallData.x, g_wallData.y, g_wallData.z);
+        ImGui::Text("Wall Yaw: %.2f°", g_wallData.oriY);
+        ImGui::Text("Wall Width: %.2f", g_wallData.width);
+        ImGui::Text("Wall Height: %.2f", g_wallData.height);
+        float yOffset = 0.5f * ballLine.height;
+        ImGui::Text("Ball offset Y: %.2f", yOffset);
+        ImGui::SeparatorText("Goal Debug");
+        ImGui::Text("CSV Pos: (%.2f, %.2f, %.2f)", g_goalData.x, g_goalData.y, g_goalData.z);
+        ImGui::Text("Width: %.2f   Height: %.2f", g_goalData.width, g_goalData.height);
+        ImGui::Text("OriY: %.2f°", g_goalData.oriY);
+        ImGui::Text("GoalBox Ymin = %.2f", g_goalBox.vmin.y);  // 检查是否低于0
+        ImGui::SeparatorText("Ball Orientation");
+        ImGui::Text("oriX: %.2f  oriY: %.2f  oriZ: %.2f",
+                    ballLine.oriX, ballLine.oriY, ballLine.oriZ);
 
-        // We can show some debug info about the ball
-        if(!g_ballFrames.empty()) {
-            CSVLine& ballLine = g_ballFrames[g_currentFrame];
-            ImGui::SeparatorText("Ball Debug");
-            ImGui::Text("Ball CSV: (%.2f, %.2f, %.2f)", 
-                        ballLine.x, ballLine.y, ballLine.z);
-        }
-
+                
         ImGui::End();
 
-        // get the current ball data
-        CSVLine& ballLine = g_ballFrames[g_currentFrame];
+        if(g_currentFrame<0) g_currentFrame=0;
+        if(g_currentFrame>=(int)g_ballFrames.size()) 
+            g_currentFrame=(int)g_ballFrames.size()-1;
 
         // camera
-        glm::vec3 camPos, lookTarget(0,0,0);
+        glm::vec3 camPos;
+        glm::vec3 lookTarget;
         if(g_followCam)
         {
-            // follow the ball
-            camPos = glm::vec3(ballLine.x, ballLine.y, ballLine.z) + glm::vec3(0,2,10);
-            lookTarget = glm::vec3(ballLine.x, ballLine.y, ballLine.z);
+            camPos= glm::vec3(ballLine.x,ballLine.y,ballLine.z)+ glm::vec3(0,2,10);
         }
+        // else
+        // {
+        //     camPos = glm::vec3(50.0f, 8.0f, 40.0f);
+
+        // }
         else
         {
-            // fixed vantage
-            camPos = glm::vec3(5.0f, 8.0f, -40.0f);
-            lookTarget = glm::vec3(0, 0, 0);
+            // 相机放在球门后方上空
+            glm::vec3 goalPos = glm::vec3(g_goalData.x, g_goalData.y + 1.0f, g_goalData.z);
+            float yaw = glm::radians(g_goalData.oriY);
+            glm::vec3 forward = glm::vec3(sin(yaw), 0, cos(yaw));
+            glm::vec3 back = -forward;
+
+            camPos = goalPos + back * 40.0f + glm::vec3(0, 20.0f, 0);
+
+            glm::vec3 ballPos = glm::vec3(ballLine.x, ballLine.y + 0.2f, ballLine.z);
+            glm::vec3 wallPos = glm::vec3(g_wallData.x, g_wallData.y + 1.0f, g_wallData.z);
+
+            // 取三者中点为视觉目标
+            lookTarget = (ballPos + wallPos + goalPos) / 3.0f;
+
         }
 
         glm::mat4 view = glm::lookAt(camPos, lookTarget, glm::vec3(0,1,0));
@@ -710,7 +695,6 @@ int main()
         glClearColor(0.25f,0.3f,0.35f,1.f);
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
 
-        // use program
         glUseProgram(prog);
         glUniformMatrix4fv(uV,1,GL_FALSE, glm::value_ptr(view));
         glUniform3f(uCP, camPos.x, camPos.y, camPos.z);
@@ -718,30 +702,28 @@ int main()
         glUniform1f(uMet,g_metal);
         glUniform1f(uExp,g_exposure);
 
-        // bind textures
-        glActiveTexture(GL_TEXTURE0);  glBindTexture(GL_TEXTURE_2D, grassDiff);
-        glActiveTexture(GL_TEXTURE1);  glBindTexture(GL_TEXTURE_2D, grassNorm);
-        glActiveTexture(GL_TEXTURE2);  glBindTexture(GL_TEXTURE_2D, grassRgh);
+        // bind all textures
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, grassDiff);
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, grassNorm);
+        glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, grassRgh);
 
-        glActiveTexture(GL_TEXTURE3);  glBindTexture(GL_TEXTURE_2D, ballDiff);
-        glActiveTexture(GL_TEXTURE4);  glBindTexture(GL_TEXTURE_2D, ballNorm);
-        glActiveTexture(GL_TEXTURE5);  glBindTexture(GL_TEXTURE_2D, ballRgh);
+        glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, ballDiff);
+        glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, ballNorm);
+        glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, ballRgh);
 
-        glActiveTexture(GL_TEXTURE6);  glBindTexture(GL_TEXTURE_2D, goalDiff);
-        glActiveTexture(GL_TEXTURE7);  glBindTexture(GL_TEXTURE_2D, goalNorm);
-        glActiveTexture(GL_TEXTURE8);  glBindTexture(GL_TEXTURE_2D, goalRgh);
+        glActiveTexture(GL_TEXTURE6); glBindTexture(GL_TEXTURE_2D, goalDiff);
+        glActiveTexture(GL_TEXTURE7); glBindTexture(GL_TEXTURE_2D, goalNorm);
+        glActiveTexture(GL_TEXTURE8); glBindTexture(GL_TEXTURE_2D, goalRgh);
 
         glActiveTexture(GL_TEXTURE9);  glBindTexture(GL_TEXTURE_2D, wallDiff);
-        glActiveTexture(GL_TEXTURE10); glBindTexture(GL_TEXTURE_2D, wallNorm);
-        glActiveTexture(GL_TEXTURE11); glBindTexture(GL_TEXTURE_2D, wallRgh);
+        glActiveTexture(GL_TEXTURE10); glBindTexture(GL_TEXTURE_2D,wallNorm);
+        glActiveTexture(GL_TEXTURE11); glBindTexture(GL_TEXTURE_2D,wallRgh);
 
-        GLint uM   = glGetUniformLocation(prog,"model");
-        GLint uObj = glGetUniformLocation(prog,"objectType");
+        // draw plane
+        GLint uM= glGetUniformLocation(prog,"model");
+        GLint uObj= glGetUniformLocation(prog,"objectType");
 
-        // --------------------------
-        // draw plane (grass)
-        // --------------------------
-        glUniform1i(uObj, 0); // grass
+        glUniform1i(uObj,0);
         {
             glm::mat4 m(1.f);
             glUniformMatrix4fv(uM,1,GL_FALSE, glm::value_ptr(m));
@@ -749,108 +731,144 @@ int main()
             glDrawElements(GL_TRIANGLES,g_planeMesh.indexCount,GL_UNSIGNED_INT,0);
         }
 
-        // --------------------------
-        // draw wall (4-person)
-        // --------------------------
-        glUniform1i(uObj,3); // wall
+        // draw wall
+        glUniform1i(uObj,3);
+        // wall
         {
             glm::vec3 boxSize= g_wallBox.vmax - g_wallBox.vmin;
-            float objWidth  = boxSize.x;
+            float objWidth = boxSize.x;
             float objHeight = boxSize.y;
 
-            float scaleX = (objWidth  > 1e-5f) ? (g_wallData.width  / objWidth)  : 1.f;
+            float scaleX = (objWidth > 1e-5f) ? (g_wallData.width / objWidth) : 1.f;
             float scaleY = (objHeight > 1e-5f) ? (g_wallData.height / objHeight) : 1.f;
             float scaleZ = scaleX;
 
+            // ✔️ 排列方向向量：从角度 oriY 推出朝向向量（世界坐标）
+            float yawDeg = g_wallData.oriY;
             float yawRad = glm::radians(g_wallData.oriY + 180.0f);
-            glm::vec3 dir = glm::vec3(cos(yawRad), 0.f, -sin(yawRad));  
+            glm::vec3 dir = glm::vec3(cos(yawRad), 0.f, -sin(yawRad));  // 面朝 -Z 就是这方向
+
+            // ✔️ 中心点
             glm::vec3 center = glm::vec3(g_wallData.x, g_wallData.y, g_wallData.z);
 
-            // total # of persons
+            // ✔️ 设置人墙总宽度、每人间距
             const int wallCount = 4;
-            float spacing = g_wallData.width / (float)wallCount;
+            float spacing = g_wallData.width / (float)(wallCount); // 每个人的间隔
 
+            // ✔️ 按照“中心对称”在 dir 上排布
             for (int i = 0; i < wallCount; ++i)
             {
-                float local = (i + 0.5f)* spacing - g_wallData.width * 0.5f;
-                glm::vec3 pos = center + dir * local;
+                // local ∈ [-width/2 + spacing/2, ..., +width/2 - spacing/2]
+                float local = (i + 0.5f) * spacing - g_wallData.width / 2.0f;
+
+                glm::vec3 pos = center + dir * local; // 在朝向 dir 上平移
 
                 glm::mat4 mWall(1.f);
                 mWall = glm::translate(mWall, pos);
-                mWall = glm::rotate(mWall, yawRad, glm::vec3(0,1,0));
+                mWall = glm::rotate(mWall, yawRad, glm::vec3(0,1,0));  // 朝向
                 mWall = glm::scale(mWall, glm::vec3(scaleX, scaleY, scaleZ));
 
-                glUniformMatrix4fv(uM,1,GL_FALSE, glm::value_ptr(mWall));
+                glUniformMatrix4fv(uM, 1, GL_FALSE, glm::value_ptr(mWall));
                 glBindVertexArray(g_wallMesh.vao);
                 glDrawElements(GL_TRIANGLES, g_wallMesh.indexCount, GL_UNSIGNED_INT, nullptr);
+
+                
             }
         }
 
-        // --------------------------
+
         // draw ball
-        // --------------------------
+        // glUniform1i(uObj,1);
+        // {
+        //     glm::vec3 bSize= g_ballBox.vmax- g_ballBox.vmin;
+        //     float ow= bSize.x;  
+        //     float oh= bSize.y;  
+        //     float sx= (ow>1e-5f)? (ballLine.width/ ow):1.f;
+        //     float sy= (oh>1e-5f)? (ballLine.height/oh):1.f;
+        //     float sz= sx; // or keep sphere shape
+
+        //     //glm::mat4 mBall(1.f);
+        //     // foot offset if you want the ball to sit on y=?
+        //     // 修正后的 ball.y = CSV_y + 半个高度（半径）
+        //     float yOffset = 0.0f + 0.12f;
+        //     glm::mat4 mBall = glm::mat4(1.f);
+        //     mBall = glm::translate(mBall, glm::vec3(ballLine.x, ballLine.y + yOffset, ballLine.z));
+        //     mBall = glm::scale(mBall, glm::vec3(sx, sy, sz));
+
+        //     // orientation if you have ballLine.oriY
+        //     float yaw= glm::radians(ballLine.oriY);
+        //     mBall= glm::rotate(mBall, yaw, glm::vec3(0,1,0));
+
+        //     //mBall= glm::scale(mBall, glm::vec3(sx,sy,sz));
+
+        //     glUniformMatrix4fv(uM,1,GL_FALSE, glm::value_ptr(mBall));
+        //     glBindVertexArray(g_ballMesh.vao);
+        //     glDrawElements(GL_TRIANGLES,g_ballMesh.indexCount,GL_UNSIGNED_INT,0);
+        // }
         {
-            glUniform1i(uObj, 1); // ball
+            // measure bounding box size
             glm::vec3 bSize = g_ballBox.vmax - g_ballBox.vmin;
-            float sx= (bSize.x > 1e-5f) ? (ballLine.width  / bSize.x) * 0.8f : 1.f;
-            float sy= (bSize.y > 1e-5f) ? (ballLine.height / bSize.y) * 0.8f: 1.f;
-            float sz= sx; // keep sphere scale
-
-            float yOffset = 0.24f; // offset so it doesn't sink below plane
-
-            glm::mat4 mBall(1.f);
-            mBall = glm::translate(mBall, 
-                      glm::vec3(ballLine.x, ballLine.y + yOffset, ballLine.z));
-
-            // orientation (Rodrigues style or standard rotate)
-            glm::vec3 axis    = glm::normalize(glm::vec3(0,1,0));
-            float angleRad    = glm::radians(ballLine.oriY); 
-            glm::mat4 rot     = glm::rotate(glm::mat4(1.f), angleRad, axis);
-            mBall = mBall * rot;
-
-            // scale
+            float sx= (bSize.x > 1e-5f) ? (ballLine.width  / bSize.x) : 1.f;
+            float sy= (bSize.y > 1e-5f) ? (ballLine.height / bSize.y) : 1.f;
+            float sz= sx; // keep spherical scale
+        
+            // half or partial offset so it sits on the ground
+            float yOffset = 0.12f;
+        
+            glm::mat4 mBall = glm::mat4(1.f);
+            mBall = glm::translate(mBall, glm::vec3(ballLine.x, ballLine.y + yOffset, ballLine.z));
+        
+            // Convert orientation from degrees to radians
+            float pitch = glm::radians(ballLine.oriX);
+            float yaw   = glm::radians(ballLine.oriY);
+            float roll  = glm::radians(ballLine.oriZ);
+        
+            // A typical rotation order: yaw → pitch → roll
+            // (you can change if needed)
+            mBall = glm::rotate(mBall, yaw,   glm::vec3(0,1,0));
+            mBall = glm::rotate(mBall, pitch, glm::vec3(1,0,0));
+            mBall = glm::rotate(mBall, roll,  glm::vec3(0,0,1));
+        
+            // Finally scale
             mBall = glm::scale(mBall, glm::vec3(sx, sy, sz));
-
-            glUniformMatrix4fv(uM,1,GL_FALSE, glm::value_ptr(mBall));
+        
+            glUniformMatrix4fv(uM, 1, GL_FALSE, glm::value_ptr(mBall));
+            glUniform1i(uObj, 1); // ball
             glBindVertexArray(g_ballMesh.vao);
             glDrawElements(GL_TRIANGLES, g_ballMesh.indexCount, GL_UNSIGNED_INT, 0);
         }
+        
 
-        // --------------------------
         // draw goal
-        // --------------------------
-        glUniform1i(uObj, 2); // goal
+        glUniform1i(uObj,2);
         {
-            glm::vec3 gSize = g_goalBox.vmax - g_goalBox.vmin;
+            glm::vec3 gSize= g_goalBox.vmax- g_goalBox.vmin;
             float ow= gSize.x;
             float oh= gSize.y;
-
-            // *1.5f 
-            float sx= (ow>1e-5f)? (g_goalData.width / ow) * 1.5f : 1.5f;
-            float sy= (oh>1e-5f)? (g_goalData.height/oh) * 1.5f : 1.5f;
+            float sx= (ow>1e-5f)? (g_goalData.width/ ow):1.f;
+            float sy= (oh>1e-5f)? (g_goalData.height/oh):1.f;
             float sz= sx;
 
             glm::mat4 mGoal(1.f);
+            // foot offset if needed
             float footOffsetY= -(g_goalBox.vmin.y)* sy;
-            mGoal= glm::translate(mGoal, 
-                     glm::vec3(g_goalData.x, g_goalData.y + footOffsetY, g_goalData.z));
 
+            mGoal= glm::translate(mGoal, glm::vec3(g_goalData.x,
+                                                   g_goalData.y+ footOffsetY,
+                                                   g_goalData.z));
             // orientation
             float yaw= glm::radians(g_goalData.oriY);
-            mGoal= glm::rotate(mGoal, glm::radians(180.0f), glm::vec3(0,1,0));
+            mGoal = glm::rotate(mGoal, glm::radians(180.0f), glm::vec3(0, 1, 0));
 
-            mGoal= glm::scale(mGoal, glm::vec3(sx, sy, sz));
+            mGoal= glm::scale(mGoal, glm::vec3(sx,sy,sz));
 
             glUniformMatrix4fv(uM,1,GL_FALSE, glm::value_ptr(mGoal));
             glBindVertexArray(g_goalMesh.vao);
-            glDrawElements(GL_TRIANGLES, g_goalMesh.indexCount, GL_UNSIGNED_INT, 0);
+            glDrawElements(GL_TRIANGLES,g_goalMesh.indexCount,GL_UNSIGNED_INT,0);
         }
 
-        // render ImGui
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-        // swap
         glfwSwapBuffers(win);
     }
 
